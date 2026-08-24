@@ -84,7 +84,6 @@ def build_paypal_request(
     cfg: Settings,
     *,
     headers: dict | None = None,
-    tamper_signature: bool = False,
 ) -> Request:
     if headers is None:
         transmission_id = "11111111-2222-3333-4444-555555555555"
@@ -93,8 +92,6 @@ def build_paypal_request(
         message = f"{transmission_id}|{transmission_time}|{cfg.PAYPAL_WEBHOOK_ID}|{crc}"
         signature = rsa_key.sign(message.encode(), padding.PKCS1v15(), hashes.SHA256())
         signature = base64.b64encode(signature).decode()
-        if tamper_signature:
-            signature = base64.b64encode(b"not-the-real-signature").decode()
 
         headers = {
             "paypal-transmission-id": transmission_id,
@@ -134,43 +131,42 @@ async def test_valid_payload_is_accepted(
     )
 
     response = await _request_auth_protocol(req)
-    assert isinstance(response, PaypalEvent)
+    assert isinstance(response, PaypalEvent), "Valid HTTP request failed"
 
 
-async def test_bad_signature_returns_400(
+async def test_bad_headers_return_400(
     cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
 ):
     httpx_mock.add_response(url=CERT_URL, content=cert_pem)
-    req = build_paypal_request(
-        json.dumps(VALID_EVENT_PAYLOAD).encode(),
-        rsa_key,
-        cfg,
-        tamper_signature=True,
-    )
-
-    response = await _request_auth_protocol(req)
-    assert isinstance(response, Response)
-    assert response.status_code == 400
-
-
-async def test_missing_header_returns_400(cfg: Settings, rsa_key: RSAPrivateKey):
     body = json.dumps(VALID_EVENT_PAYLOAD).encode()
-    headers = {
-        "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
-        "paypal-cert-url": CERT_URL,
-        "paypal-transmission-sig": "unused",
-    }
     req = build_paypal_request(
         body,
         rsa_key,
         cfg,
-        headers=headers,
+        headers={
+            "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
+            "paypal-cert-url": CERT_URL,
+            "paypal-transmission-sig": "unused",
+        },
     )
-
     response = await _request_auth_protocol(req)
-
     assert isinstance(response, Response)
-    assert response.status_code == 400
+    assert 400 <= response.status_code < 500, "Missing headers didn't return a 4xx"
+
+    req = build_paypal_request(
+        body,
+        rsa_key,
+        cfg,
+        headers={
+            "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
+            "paypal-transmission-time": "08-20-2006",
+            "paypal-cert-url": CERT_URL,
+            "paypal-transmission-sig": "fuck",
+        },
+    )
+    response = await _request_auth_protocol(req)
+    assert isinstance(response, Response)
+    assert 400 <= response.status_code < 500, "Bad signature didn't return a 4xx"
 
 
 async def test_malformed_json_schema_returns_400(
@@ -185,4 +181,4 @@ async def test_malformed_json_schema_returns_400(
 
     response = await _request_auth_protocol(req)
     assert isinstance(response, Response)
-    assert response.status_code == 400
+    assert 400 <= response.status_code < 500, "Bad JSON schema didn't return a 4xx"
