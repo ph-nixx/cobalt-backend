@@ -10,3 +10,6 @@ wheels/
 .venv
 .env**
 
+# llm tooling
+.claude**
+.specify**
