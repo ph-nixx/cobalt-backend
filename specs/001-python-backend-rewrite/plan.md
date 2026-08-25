@@ -16,7 +16,7 @@ Port the two server-side flows of the existing Next.js backend (quote/contact su
 
 **Storage**: PostgreSQL (Neon) — same `quote_requests` and `conversions` tables the current system uses (see `data-model.md`); no new tables
 
-**Testing**: `pytest` + `pytest-asyncio`; Starlette's `TestClient` (`starlette.testclient.TestClient`) for endpoint-level contract tests; focused unit tests for hashing, invoice-phone extraction, click-id staleness, and webhook signature verification
+**Testing**: `pytest` + `pytest-asyncio` + `pytest-httpx` (mocks outbound `httpx` calls, e.g. the PayPal cert fetch); tests are colocated next to the module they cover as `<module>_test.py` (e.g. `webhooks/paypal_test.py`) rather than a separate `tests/` tree, matching `pyproject.toml`'s `pythonpath = ["src"]`; handler-level tests build a Starlette `Request` directly; focused unit coverage for hashing, invoice-phone extraction, click-id staleness, and webhook signature verification
 
 **Target Platform**: Linux server (containerized), deployed on Fly.io; the quote-submission route is restricted to the authorized frontend via an app-level shared secret (FR-001a; see `research.md` #3), the webhook route remains publicly reachable (PayPal must reach it from the internet)
 
@@ -55,51 +55,31 @@ specs/001-python-backend-rewrite/
 ### Source Code (repository root)
 
 ```text
-src/cobalt_backend/
-├── __init__.py            # exposes main() for the `cobalt-backend` script entry point
-├── main.py                # Starlette app construction + Uvicorn boot
-├── config.py               # pydantic-settings: DB URL, PayPal creds/webhook ids, SMTP,
-│                           #   FRONTEND_SHARED_SECRET, PHONE_DISPLAY/PHONE_TEL, COBALT_EMAIL,
-│                           #   GOOGLE_ADS_ID/GA4_ID, service/vehicle option lists (FR-017)
-├── api/
-│   ├── __init__.py
-│   ├── quotes.py           # POST /api/quotes — User Story 1 (FR-001–FR-007, FR-001a)
-│   └── paypal_webhook.py   # POST /api/paypal-webhook — User Story 2 (FR-008–FR-016)
-├── services/
-│   ├── paypal.py           # OAuth token cache, paypal_phone shape, create_draft_invoice (research.md #7)
-│   ├── email.py             # send_email (Jinja2 render → HTML+text → SMTP); lead + operator-alert templates
-│   ├── quotes.py            # quote persistence + lookup-by-id (FR-007, FR-011)
-│   └── conversions.py       # click-id staleness gate, identifier resolution, idempotent write (FR-012–FR-016)
-├── lib/
-│   ├── hash_identifier.py    # hashEmail/hashPhone port (FR-014)
-│   ├── extract_invoice_phone.py  # US phone extraction from invoice text (FR-013)
-│   ├── webhook_auth.py        # PayPal transmission signature verification (FR-008/FR-009)
-│   ├── access_control.py      # frontend shared-secret check (FR-001a)
-│   └── time_format.py         # America/New_York formatting helpers (FR-018)
+src/
+├── main.py                  # Starlette app construction + Uvicorn boot; aggregates `routes` from bookings/ and webhooks/
+├── cfg.py                   # pydantic-settings: DB URL, PayPal creds/webhook ids, SMTP,
+│                             #   FRONTEND_SHARED_SECRET, PHONE_DISPLAY/PHONE_TEL, COBALT_EMAIL,
+│                             #   GOOGLE_ADS_ID/GA4_ID, service/vehicle option lists (FR-017)
+├── db.py                    # asyncpg pool + parameterized queries against quote_requests/conversions
+├── email.py                  # send_email (Jinja2 render → HTML+text → SMTP); lead + operator-alert templates
+├── paypal.py                 # outbound PayPal client: OAuth token cache, create_draft_invoice (research.md #7)
 ├── alerts.py                 # operator-alert triggers for FR-020/FR-021 (research.md #4)
-├── validation/
-│   └── contact.py             # pydantic request schema + refinements (service/vehicle enum, phone, pickup-time)
-├── db.py                      # asyncpg pool + parameterized queries against quote_requests/conversions
-└── templates/
-    ├── lead_notification.html.jinja / .txt.jinja
-    └── operator_alert.html.jinja / .txt.jinja
-
-tests/
-├── contract/
-│   ├── test_quotes_contract.py       # exercises contracts/quote-submission.md
-│   └── test_webhook_contract.py      # exercises contracts/paypal-webhook.md
-├── integration/
-│   ├── test_quote_submission_flow.py # end-to-end: submit → email + invoice + persisted row
-│   └── test_webhook_conversion_flow.py # end-to-end: paid event → single conversion row
-└── unit/
-    ├── test_hash_identifier.py
-    ├── test_extract_invoice_phone.py
-    ├── test_click_id_staleness.py
-    ├── test_webhook_auth.py
-    └── test_contact_validation.py
+├── hashing.py                # hashEmail/hashPhone port (FR-014)
+├── time_format.py            # business-local-timezone formatting helpers (FR-018)
+├── templates/
+│   ├── lead_notification.html.jinja / .txt.jinja
+│   └── operator_alert.html.jinja / .txt.jinja
+├── bookings/
+│   ├── __init__.py           # exposes `routes` — POST /api/bookings
+│   ├── submission.py         # quote/contact submission handler — User Story 1 (FR-001–FR-007, FR-001a)
+│   └── submission_test.py
+└── webhooks/
+    ├── __init__.py           # exposes `routes` — POST /api/hooks/paypal
+    ├── paypal.py              # signature verification + event handling — User Story 2 (FR-008–FR-016)
+    └── paypal_test.py
 ```
 
-**Structure Decision**: Single backend-service project under `src/cobalt_backend/` (matches the existing `pyproject.toml` entry point `cobalt-backend = "cobalt_backend:main"` and the empty `src/main.py` scaffold already in the repo — `main.py` will be superseded by the package layout above). No `frontend/` directory exists in or is added to this repository; the frontend remains a separate, already-existing application that calls this service over HTTP using the credential described in `contracts/quote-submission.md`.
+**Structure Decision**: Flat, domain-oriented package layout under `src/`, superseding the layered `api/services/lib/validation/` hierarchy originally proposed here — each domain (`bookings/`, `webhooks/`) owns its handler(s) and exposes a `routes` list that `main.py` aggregates into the Starlette app, matching the structure already established by the existing `src/bookings/` and `src/webhooks/` packages. Shared/cross-domain concerns (config, DB pool, email, outbound PayPal client, hashing, alerting, time formatting) live as flat top-level modules under `src/` rather than a nested `services/`/`lib/` split. Tests are colocated next to the module they cover as `<module>_test.py` (matching `webhooks/paypal_test.py`, already in the repo, and `pyproject.toml`'s `pythonpath = ["src"]`), not split into a separate `tests/{contract,integration,unit}/` tree. There is no `cobalt-backend` console-script entry point; the service is run directly (`uv run python src/main.py`). No `frontend/` directory exists in or is added to this repository; the frontend remains a separate, already-existing application that calls this service over HTTP using the credential described in `contracts/quote-submission.md`.
 
 ## Complexity Tracking
 

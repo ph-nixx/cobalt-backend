@@ -1,6 +1,6 @@
 # Contract: Quote Submission
 
-`POST /api/quotes`
+`POST /api/bookings`
 
 Replaces the current `submitContactRequest` Server Action (spec User Story 1). Unlike the Server Action, this is a directly-callable HTTP endpoint, which is precisely why FR-001a exists — see **Access control** below.
 

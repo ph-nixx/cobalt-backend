@@ -14,15 +14,17 @@ Set `PAYPAL_ALLOW_SANDBOX=1` for the scenarios below that use sandbox event type
 ## 2. Run the server
 
 ```bash
-uv run cobalt-backend
+uv run python src/main.py
 ```
+
+(There is no installed console-script entry point yet — the service is run directly.)
 
 ## 3. Validate User Story 1 — quote submission (see `contracts/quote-submission.md`)
 
 **Happy path:**
 
 ```bash
-curl -i -X POST http://localhost:8000/api/quotes \
+curl -i -X POST http://localhost:8080/api/bookings \
   -H "Authorization: Bearer $FRONTEND_SHARED_SECRET" \
   -H "Content-Type: application/json" \
   -d '{
@@ -55,7 +57,7 @@ Use PayPal's sandbox webhook simulator (or a signed test payload) to send an `IN
 **Happy path:**
 
 ```bash
-curl -i -X POST http://localhost:8000/api/paypal-webhook \
+curl -i -X POST http://localhost:8080/api/hooks/paypal \
   -H "Content-Type: application/json" \
   -H "paypal-transmission-id: <from simulator>" \
   -H "paypal-transmission-time: <from simulator>" \

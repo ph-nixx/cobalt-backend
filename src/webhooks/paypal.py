@@ -1,5 +1,6 @@
 import base64
 from datetime import datetime
+from typing import Literal
 from zlib import crc32
 
 import httpx
@@ -16,33 +17,23 @@ client = httpx.AsyncClient()
 
 class PaypalEvent(BaseModel):
     class Resource(BaseModel):
-        class Invoice(BaseModel):
-            class Detail(BaseModel):
-                reference: str
+        class Detail(BaseModel):
+            invoice_number: int
+            reference: str | None = None
 
-            class Amount(BaseModel):
-                currency_code: str
-                value: float
+        class Amount(BaseModel):
+            currency_code: str
+            value: float
 
-            class Recipient(BaseModel):
-                class BillingInfo(BaseModel):
-                    email_address: str
+        id: str
+        status: Literal["PAID"]
+        detail: Detail
+        amount: Amount
 
-                billing_info: BillingInfo
-
-            class Item(BaseModel):
-                name: str
-                description: str
-
-            id: str
-            detail: Detail
-            amount: Amount
-            primary_recipients: list[Recipient]
-            items: list[Item]
-
-        invoice: Invoice
-
+    id: str
     create_time: datetime
+    resource_type: Literal["invoicing"]
+    event_type: Literal["INVOICING.INVOICE.PAID"]
     resource: Resource
 
 
@@ -82,7 +73,7 @@ async def _request_auth_protocol(request: Request) -> PaypalEvent | Response:
     try:
         cert.public_key().verify(
             signature=base64.b64decode(headers.signature),
-            data=f"{headers.id}|{headers.time}|{request.app.state.cfg.PAYPAL_WEBHOOK_ID}|{crc}".encode(),
+            data=f"{headers.id}|{headers.time}|{request.state.cfg.PAYPAL_WEBHOOK_ID}|{crc}".encode(),
             padding=padding.PKCS1v15(),
             algorithm=hashes.SHA256(),
         )

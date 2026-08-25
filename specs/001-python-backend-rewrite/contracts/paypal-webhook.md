@@ -1,6 +1,6 @@
 # Contract: PayPal Webhook
 
-`POST /api/paypal-webhook`
+`POST /api/hooks/paypal`
 
 Replaces the current `app/api/paypal-webhook/route.ts` handler (spec User Story 2). This endpoint is intentionally **public** — PayPal must be able to reach it from the internet — which is why its protection is signature verification (FR-008/FR-009), not the shared-secret scheme used for the quote-submission endpoint (see `research.md` #3).
 

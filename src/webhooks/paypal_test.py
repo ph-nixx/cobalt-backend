@@ -1,7 +1,6 @@
 import base64
 import json
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from zlib import crc32
 
 import pytest
@@ -21,39 +20,81 @@ from .paypal import PaypalEvent, _request_auth_protocol
 CERT_URL = "https://api.sandbox.paypal.com/fake-cert.pem"
 
 VALID_EVENT_PAYLOAD = {
-    "create_time": "2026-08-24T12:00:00Z",
+    "id": "WH-2WR32451HC0233532-1TR54305UM875670F",
+    "create_time": "2026-08-24T22:12:06Z",
+    "resource_type": "invoicing",
+    "event_type": "INVOICING.INVOICE.PAID",
+    "summary": "An invoice was paid",
+    "resource_version": "2.0",
     "resource": {
-        "invoice": {
-            "id": "INV2-TEST-0001",
-            "detail": {"reference": "order-123"},
-            "amount": {"currency_code": "USD", "value": 42.50},
-            "primary_recipients": [
-                {"billing_info": {"email_address": "payer@example.com"}}
+        "id": "INV2-XXXX-XXXX-XXXX-XXXX",
+        "status": "PAID",
+        "detail": {"invoice_number": "0001", "invoice_date": "2026-08-24"},
+        "amount": {"currency_code": "USD", "value": "250.00"},
+        "due_amount": {"currency_code": "USD", "value": "0.00"},
+        "payments": {
+            "paid_amount": {"currency_code": "USD", "value": "250.00"},
+            "transactions": [
+                {
+                    "type": "PAYPAL",
+                    "payment_id": "TXNID12345",
+                    "payment_date": "2026-08-24",
+                    "method": "PAYPAL",
+                    "amount": {"currency_code": "USD", "value": "250.00"},
+                }
             ],
-            "items": [{"name": "Widget", "description": "A test widget"}],
-        }
+        },
     },
+    "links": [
+        {
+            "href": "https://api-m.paypal.com/v2/invoicing/invoices/INV2-XXXX-XXXX-XXXX-XXXX",
+            "rel": "self",
+            "method": "GET",
+        }
+    ],
 }
 
 MALFORMED_EVENT_PAYLOAD = {
-    "create_time": "2026-08-24T12:00:00Z",
+    "id": "WH-2WR32451HC0233532-1TR54305UM875670F",
+    "create_time": "2026-08-24T22:12:06Z",
+    "resource_type": "invoicing",
+    "event_type": "INVOICING.INVOICE.PAID",
+    "summary": "An invoice was paid",
+    "resource_version": "2.0",
     "resource": {
-        "invoice": {
-            "id": "INV2-TEST-0001",
-            "detail": {"reference": "order-123"},
-            "amount": {"currency_code": "USD", "value": "not-a-number"},
-            "primary_recipients": [
-                {"billing_info": {"email_address": "payer@example.com"}}
+        "id": "INV2-XXXX-XXXX-XXXX-XXXX",
+        "status": "PAID",
+        "detail": {"invoice_number": "0001", "invoice_date": "2026-08-24"},
+        "amount": {"currency_code": "USD", "value": "not-a-number"},
+        "due_amount": {"currency_code": "USD", "value": "0.00"},
+        "payments": {
+            "paid_amount": {"currency_code": "USD", "value": "250.00"},
+            "transactions": [
+                {
+                    "type": "PAYPAL",
+                    "payment_id": "TXNID12345",
+                    "payment_date": "2026-08-24",
+                    "method": "PAYPAL",
+                    "amount": {"currency_code": "USD", "value": "250.00"},
+                }
             ],
-            "items": [{"name": "Widget", "description": "A test widget"}],
-        }
+        },
     },
+    "links": [
+        {
+            "href": "https://api-m.paypal.com/v2/invoicing/invoices/INV2-XXXX-XXXX-XXXX-XXXX",
+            "rel": "self",
+            "method": "GET",
+        }
+    ],
 }
 
 
 @pytest.fixture(scope="module")
 def cfg() -> Settings:
-    return Settings(PAYPAL_WEBHOOK_ID="DEFAULT")
+    return Settings(
+        PAYPAL_WEBHOOK_ID="DEFAULT", PG_URL="", SMPT_LOGIN="", SMPT_PASSWORD=""
+    )
 
 
 @pytest.fixture(scope="module")
@@ -105,7 +146,7 @@ def build_paypal_request(
         "method": "POST",
         "path": "/",
         "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
-        "app": SimpleNamespace(state=SimpleNamespace(cfg=cfg)),
+        "state": {"cfg": cfg},
     }
 
     sent = False
