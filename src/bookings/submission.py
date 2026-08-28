@@ -19,6 +19,8 @@ class Submission(BaseModel):
     date_booked: datetime
     email: EmailStr
     phone: PhoneNumber
+
+    # the backend controls what form submission values are valid
     vehicle: Literal["suv", "sprinter"]
     service: Literal["airport", "corporate", "day-trip", "masters", "wedding", "other"]
     notes: str
@@ -33,12 +35,12 @@ class Submission(BaseModel):
 
 async def process_submission(request: Request) -> Response:
     try:
-        Submission.model_validate_json(await request.body())
+        submission = Submission.model_validate_json(await request.body())
     except ValidationError as e:
         return JSONResponse(
             {"invalid_fields": [err["loc"][0] for err in e.errors()]}, status_code=400
         )
 
-    await send_email(request.state.cfg, "", "", {})
+    await send_email(submission.email, "booking_submission", {})
 
     return Response(status_code=200)
