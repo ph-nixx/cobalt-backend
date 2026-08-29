@@ -1,1 +1,1 @@
-from .send import send_email as send_email
+from .gmail import Gmail as Gmail

@@ -7,6 +7,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 from starlette.applications import Starlette
 
+from emails import Gmail
+
 
 class Settings(BaseSettings):
     # WEBHOOK_ID is the sandbox default id
@@ -21,6 +23,7 @@ class Settings(BaseSettings):
 class State(TypedDict):
     cfg: Settings
     db: asyncpg.Pool
+    gmail: Gmail
 
 
 @contextlib.asynccontextmanager
@@ -29,4 +32,5 @@ async def lifespan(app: Starlette) -> AsyncIterator[State]:
     async with asyncpg.create_pool(
         cfg.PG_URL, min_size=cfg.PG_MIN_POOL, max_size=cfg.PG_MAX_POOL
     ) as db:
-        yield State(cfg=cfg, db=db)
+        with Gmail(cfg.SMPT_LOGIN, cfg.SMPT_PASSWORD) as gmail:
+            yield State(cfg=cfg, db=db, gmail=gmail)
