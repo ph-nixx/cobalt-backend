@@ -73,3 +73,48 @@ failure-handling contract for it, then added a context-manager shutdown path.
 - Follow-up review of `gmail.py` found: `_poller`'s
   `_reconnect()` call is still unprotected, and `send()` has no guard
   against being called after (or racing) `__exit__`, so a future can still hang.
+
+---
+
+# <2026-08-29>
+
+Continued hardening `src/emails/gmail.py`'s shutdown and error-handling; several
+approaches tried and discarded before landing on the current design.
+
+- Fixed `_poller`'s unprotected reconnect call (now the thread can't terminate on a reconnect). 
+  Decided `_poller` should log reconnect failures too, not just ignore
+  them for long idle periods could hide a SMTP connection problems.
+  Added exception name dedup so repeated identical failures don't spam the log.
+- Tried an `Event`-based open/closed flag for `__exit__` to wait on. Worse than the
+  bug it fixed: deadlocks on first use (Event starts cleared), breaks entirely on
+  the failure path (`_open.set()` never runs if `await fut` raises), and risks
+  deadlocking the event loop itself if `__exit__` runs on the loop's own thread.
+  Abandoned.
+- Switched to `Queue.shutdown()` (project requires Python >=3.14, confirmed available). 
+  Better fit: rejects new `send()` calls immediately instead of hanging, drains already-queued work, 
+  no manual sentinel needed.
+- Confirmed via docs: `await future` raises whatever was passed to
+  `set_exception()` this is why `send()` needs no manual exception check.
+- A generic `_try_reconnect` helper was introduced, but narrowing its callers'
+  `except` to `SMTPException` reopened the silent-thread-death bug raw
+  `OSError`s (DNS failure, connection refused, timeout) aren't `SMTPException`.
+  Also found `_poller`'s retry-after-reconnect used a stale, pre-bound method
+  (retried against the old closed connection, not the new one).
+- Confirmed via docs: `SMTPException` is a subclass of `OSError`, not the reverse
+  — so `OSError` alone would cover all smtplib/network failures, but not bugs in
+  our own code, which is why `except Exception` is the safer choice.
+- Explored hard-crashing the whole process (`os._exit()`) on unexpected errors,
+  then decided against it in favor of isolating failures to just the `Gmail` object.
+- The self-isolating "panic" approach (`Queue.shutdown(immediate=True)` from
+  inside a failing thread) had two problems: asymmetric shutdown detection
+  (the other thread could take minutes to notice), any email
+  still queued at panic time got abandoned with its future never resolved.
+- Reverted the panic/self-shutdown approach entirely; kept naive "log and
+  continue" generic exception handling in both threads.
+- That reversion incidentally fixed a long-standing bug: the poller/worker
+  reconnect race, since `_try_reconnect`'s full detect-reconnect-retry sequence
+  now runs under one continuously-held lock.
+- Final fixes confirmed correct: `__exit__`'s `smtp.quit()` guarded against
+  masking the real exception, a socket-level timeout (10s) added to bound
+  previously-unbounded blocking calls, and explicit exception chaining
+  (`raise EmailNotSent from e`) added in `send()`.
