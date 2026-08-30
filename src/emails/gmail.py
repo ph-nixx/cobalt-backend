@@ -3,7 +3,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from queue import Queue, ShutDown
-from smtplib import SMTP, SMTPServerDisconnected, _SendErrs
+from smtplib import SMTP, SMTPServerDisconnected
 from threading import Event, Lock, Thread
 
 from jinja2 import Environment, PackageLoader, select_autoescape
@@ -22,6 +22,7 @@ class Email(BaseModel):
     template: Template
 
 
+type _SendErrs = dict[str, tuple[int, bytes]]
 type EmailRequest = Callable[[SMTP], _SendErrs]
 type RequestHandle = asyncio.Future[None]
 type MainEventLoop = asyncio.AbstractEventLoop
@@ -43,7 +44,18 @@ class Gmail:
     _PORT = 587
     _TIMEOUT = 10
 
-    def __init__(self, smtp_user: str, smtp_password: str, interval: int = 300) -> None:
+    def __init__(
+        self,
+        smtp_user: str,
+        smtp_password: str,
+        interval: int = 300,
+        default_factory: Callable[[], SMTP] | None = None,
+    ) -> None:
+        self._default_factory = (
+            (lambda: SMTP(self._HOST, self._PORT, timeout=self._TIMEOUT))
+            if default_factory is None
+            else default_factory
+        )
         self._user = smtp_user
         self._password = smtp_password
         self._work: Queue[Work] = Queue()
@@ -57,7 +69,7 @@ class Gmail:
         self._worker_thread = Thread(target=self._worker, daemon=True)
 
     def __enter__(self) -> Gmail:
-        self._smtp = SMTP(self._HOST, self._PORT, timeout=self._TIMEOUT)
+        self._smtp = self._default_factory()
         self._smtp.starttls()
         self._smtp.login(self._user, self._password)
         self._poller_thread.start()
@@ -136,7 +148,7 @@ class Gmail:
             return req(self._smtp)
         except SMTPServerDisconnected:
             self._smtp.close()
-            self._smtp = SMTP(self._HOST, self._PORT, timeout=self._TIMEOUT)
+            self._smtp = self._default_factory()
             self._smtp.starttls()
             self._smtp.login(self._user, self._password)
             return req(self._smtp)
