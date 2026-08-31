@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     PG_URL: str
     PG_MIN_POOL: int = Field(gt=0, default=2)
     PG_MAX_POOL: int = Field(gt=0, default=10)
-    SMPT_LOGIN: str
+    SMPT_USER: str
     SMPT_PASSWORD: str
 
 
@@ -32,5 +32,5 @@ async def lifespan(app: Starlette) -> AsyncIterator[State]:
     async with asyncpg.create_pool(
         cfg.PG_URL, min_size=cfg.PG_MIN_POOL, max_size=cfg.PG_MAX_POOL
     ) as db:
-        with Gmail(cfg.SMPT_LOGIN, cfg.SMPT_PASSWORD) as gmail:
+        with Gmail(cfg.SMPT_USER, cfg.SMPT_PASSWORD) as gmail:
             yield State(cfg=cfg, db=db, gmail=gmail)

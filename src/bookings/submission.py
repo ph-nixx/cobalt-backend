@@ -2,12 +2,14 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
+from asyncpg import Pool
 from pydantic import BaseModel, EmailStr, Field, ValidationError
 from pydantic_extra_types.phone_numbers import PhoneNumber
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from ..emails import EmailNotSent
+from ..emails import BookingLead, EmailNotSent
 
 
 class Submission(BaseModel):
@@ -16,6 +18,7 @@ class Submission(BaseModel):
 
     # the only TS implementation makes allows the client to send the data and time seperately
     # this implementation forces the client to join them before sending
+    name: str
     date_booked: datetime
     email: EmailStr
     phone: PhoneNumber
@@ -30,7 +33,15 @@ class Submission(BaseModel):
     wbraid: str | None = None
 
     def as_row(self) -> tuple:
-        return (self.id, self.email, self.gclid, self.wbraid, self.first_click)
+        return (
+            self.id,
+            self.email,
+            self.phone,
+            self.gclid,
+            self.gbraid,
+            self.wbraid,
+            self.first_click,
+        )
 
 
 async def process_submission(request: Request) -> Response:
@@ -42,8 +53,38 @@ async def process_submission(request: Request) -> Response:
         )
 
     try:
-        await request.state.gmail.send_email(submission.email, "booking_submission", {})
+        await request.state.gmail.send(
+            BookingLead(
+                sender=request.state.cfg.SMTP_USER,
+                recipient=submission.email,
+                name=submission.name,
+                service=submission.service,
+                phone=submission.phone,
+                vehicle=submission.vehicle,
+            )
+        )
     except EmailNotSent:
         return JSONResponse({}, status_code=500)
 
-    return Response(status_code=200)
+    return Response(
+        status_code=200,
+        background=BackgroundTask(persist_submission, submission, request.state.db),
+    )
+
+
+async def persist_submission(submission: Submission, db: Pool):
+    await db.execute(
+        """"
+        INSERT INTO quote_requests (
+            id, 
+            email, 
+            phone, 
+            gclid, 
+            gbraid, 
+            wbraid, 
+            first_click
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """,
+        submission.as_row(),
+    )
+    await db.close()

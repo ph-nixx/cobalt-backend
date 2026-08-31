@@ -93,7 +93,7 @@ MALFORMED_EVENT_PAYLOAD = {
 @pytest.fixture(scope="module")
 def cfg() -> Settings:
     return Settings(
-        PAYPAL_WEBHOOK_ID="DEFAULT", PG_URL="", SMPT_LOGIN="", SMPT_PASSWORD=""
+        PAYPAL_WEBHOOK_ID="DEFAULT", PG_URL="", SMPT_USER="", SMPT_PASSWORD=""
     )
 
 

@@ -1,11 +1,32 @@
 import asyncio
 import time
 from collections.abc import Callable
+from email.message import EmailMessage
 from smtplib import SMTPServerDisconnected
 
 import pytest
+from jinja2 import DictLoader, Environment
+from pydantic import PrivateAttr
 
-from .gmail import Email, EmailNotSent, Gmail, Template
+from .gmail import EmailNotSent, Gmail, _Email
+
+_TEST_ENV = Environment(
+    loader=DictLoader({"stub.html": "", "mock.html": "<p>{{ greeting }}</p>"})
+)
+
+
+class _StubEmail(_Email):
+    """Minimal _Email subclass with no content fields, for exercising Gmail's queue/thread logic independent of any real template."""
+
+    _template_name: str = PrivateAttr(default="stub.html")
+
+
+class MockEmail(_Email):
+    """_Email subclass with a content field, for verifying _render builds correct headers and renders subclass fields into the template."""
+
+    _template_name: str = PrivateAttr(default="mock.html")
+
+    greeting: str
 
 
 class FakeSMTP:
@@ -30,8 +51,8 @@ class FakeSMTP:
         self._record("noop")
         return (250, b"OK")
 
-    def sendmail(self, from_addr: str, to_addrs: str, msg: str) -> dict:
-        self._record("sendmail")
+    def send_message(self, msg: EmailMessage) -> dict:
+        self._record("send_message")
         return {}
 
     def close(self) -> None:
@@ -53,10 +74,8 @@ class FakeSMTPFactory:
         return self._instances.pop(0)
 
 
-def _email(recipient: str) -> Email:
-    return Email(
-        sender="sender@example.com", recipient=recipient, template=Template("")
-    )
+def _email(recipient: str) -> _StubEmail:
+    return _StubEmail(sender="sender@example.com", recipient=recipient)
 
 
 async def _wait_until(
@@ -78,10 +97,12 @@ async def _wait_until(
 
 async def test_bad_request_does_not_effect_preceding():
     """A failed request in the queue is an isolated instance and does not effect the remaining requests in the queue."""
-    smtp = FakeSMTP(raise_on={"sendmail": ValueError("boom")})
+    smtp = FakeSMTP(raise_on={"send_message": ValueError("boom")})
     factory = FakeSMTPFactory([smtp])
 
-    with Gmail("user", "pass", interval=10_000, default_factory=factory) as gmail:
+    with Gmail(
+        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+    ) as gmail:
         results = await asyncio.gather(
             gmail.send(_email("bad@example.com")),
             gmail.send(_email("good@example.com")),
@@ -91,15 +112,17 @@ async def test_bad_request_does_not_effect_preceding():
     assert isinstance(results[0], EmailNotSent)
     assert isinstance(results[0].__cause__, ValueError)
     assert results[1] is None
-    assert smtp.calls.count("sendmail") == 2
+    assert smtp.calls.count("send_message") == 2
 
 
 async def test_nonlisted_exception_does_not_panic():
     """A non-SMTPServerDisconnected exception from a request is caught, logged, and leaves the worker thread alive."""
-    smtp = FakeSMTP(raise_on={"sendmail": RuntimeError("weird failure")})
+    smtp = FakeSMTP(raise_on={"send_message": RuntimeError("weird failure")})
     factory = FakeSMTPFactory([smtp])
 
-    with Gmail("user", "pass", interval=10_000, default_factory=factory) as gmail:
+    with Gmail(
+        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+    ) as gmail:
         with pytest.raises(EmailNotSent):
             await gmail.send(_email("bad@example.com"))
 
@@ -107,17 +130,19 @@ async def test_nonlisted_exception_does_not_panic():
 
         await gmail.send(_email("good@example.com"))
 
-    assert smtp.calls.count("sendmail") == 2
+    assert smtp.calls.count("send_message") == 2
 
 
 async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
     """Once the worker or poller fixes a stale connection, the either thread will not reconnect until the connection becomes stale again."""
     # Phase 1: the worker fixes a stale connection; the poller must reuse it, not reconnect again.
-    stale = FakeSMTP(raise_on={"sendmail": SMTPServerDisconnected()})
+    stale = FakeSMTP(raise_on={"send_message": SMTPServerDisconnected()})
     fixed = FakeSMTP()
     factory = FakeSMTPFactory([stale, fixed])
 
-    with Gmail("user", "pass", interval=0.01, default_factory=factory) as gmail:
+    with Gmail(
+        "user", "pass", interval=0.01, default_factory=factory, env=_TEST_ENV
+    ) as gmail:
         await gmail.send(
             _email("a@example.com")
         )  # worker hits the stale sendmail and reconnects
@@ -136,7 +161,9 @@ async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
     fixed = FakeSMTP()
     factory = FakeSMTPFactory([stale, fixed])
 
-    with Gmail("user", "pass", interval=0.01, default_factory=factory) as gmail:
+    with Gmail(
+        "user", "pass", interval=0.01, default_factory=factory, env=_TEST_ENV
+    ) as gmail:
         # wait for the poller to hit the stale noop and reconnect before the worker sends anything
         assert await _wait_until(gmail, lambda: factory.call_count == 2)
 
@@ -146,7 +173,26 @@ async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
         await gmail.send(_email("a@example.com"))
 
     assert factory.call_count == 2
-    assert fixed.calls.count("sendmail") == 1
+    assert fixed.calls.count("send_message") == 1
+
+
+def test_mock_email_render_produces_expected_message() -> None:
+    """Verifies _render builds correct From/To/Subject headers, renders the subclass field into the html body, and excludes envelope fields from it."""
+    email = MockEmail(
+        sender="sender@example.com",
+        recipient="recipient@example.com",
+        subject="Test Subject",
+        greeting="Hello, World!",
+    )
+
+    msg = email._render(_TEST_ENV)
+
+    assert msg["From"] == "sender@example.com"
+    assert msg["To"] == "recipient@example.com"
+    assert msg["Subject"] == "Test Subject"
+    assert msg.get_content_type() == "text/html"
+    assert msg.get_content() == "<p>Hello, World!</p>\n"
+    assert "sender@example.com" not in msg.get_content()
 
 
 async def _test_queue_drain_throughput():
@@ -155,14 +201,16 @@ async def _test_queue_drain_throughput():
     smtp = FakeSMTP()
     factory = FakeSMTPFactory([smtp])
 
-    with Gmail("user", "pass", interval=10_000, default_factory=factory) as gmail:
+    with Gmail(
+        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+    ) as gmail:
         start = time.perf_counter()
         await asyncio.gather(
             *(gmail.send(_email(f"user{i}@example.com")) for i in range(email_count))
         )
         elapsed = time.perf_counter() - start
 
-    assert smtp.calls.count("sendmail") == email_count
+    assert smtp.calls.count("send_message") == email_count
     print(
         f"\ndrained {email_count} emails in {elapsed:.4f}s "
         f"({email_count / elapsed:,.0f} emails/sec)"
