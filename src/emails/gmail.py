@@ -6,17 +6,15 @@ from queue import Queue, ShutDown
 from smtplib import SMTP, SMTPServerDisconnected
 from threading import Event, Lock, Thread
 
-from jinja2 import Environment, PackageLoader, select_autoescape
-from pydantic import BaseModel, EmailStr
+from jinja2 import Environment, PackageLoader, Template, select_autoescape
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 logger = logging.getLogger(__name__)
 
 
-class Template(BaseModel):
-    pass
-
-
 class Email(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     sender: EmailStr
     recipient: EmailStr
     template: Template

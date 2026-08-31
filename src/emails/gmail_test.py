@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Callable
 from smtplib import SMTPServerDisconnected
 
 import pytest
@@ -53,7 +54,26 @@ class FakeSMTPFactory:
 
 
 def _email(recipient: str) -> Email:
-    return Email(sender="sender@example.com", recipient=recipient, template=Template())
+    return Email(
+        sender="sender@example.com", recipient=recipient, template=Template("")
+    )
+
+
+async def _wait_until(
+    gmail: Gmail,
+    predicate: Callable[[], bool],
+    timeout: float = 1.0,
+    poll: float = 0.005,
+) -> bool:
+    """Polls a predicate under gmail's lock until it's true or the timeout elapses, so the check is mutually exclusive with its threads."""
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        with gmail._lock:
+            if predicate():
+                return True
+        await asyncio.sleep(poll)
+    with gmail._lock:
+        return predicate()
 
 
 async def test_bad_request_does_not_effect_preceding():
@@ -90,22 +110,43 @@ async def test_nonlisted_exception_does_not_panic():
     assert smtp.calls.count("sendmail") == 2
 
 
-def test_no_redundant_reconnections():
-    """When the connection is fixed by the poller or worker it should not be replaced until it goes stale."""
-    stale_smtp = FakeSMTP(raise_on={"noop": SMTPServerDisconnected()})
-    fresh_smtp = FakeSMTP()
-    factory = FakeSMTPFactory([fresh_smtp])
-    gmail = Gmail("user", "pass", default_factory=factory)
-    gmail._smtp = stale_smtp
+async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
+    """Once the worker or poller fixes a stale connection, the either thread will not reconnect until the connection becomes stale again."""
+    # Phase 1: the worker fixes a stale connection; the poller must reuse it, not reconnect again.
+    stale = FakeSMTP(raise_on={"sendmail": SMTPServerDisconnected()})
+    fixed = FakeSMTP()
+    factory = FakeSMTPFactory([stale, fixed])
 
-    gmail._try_reconnect(lambda smtp: smtp.noop())
-    assert factory.call_count == 1
-    assert gmail._smtp is fresh_smtp
+    with Gmail("user", "pass", interval=0.01, default_factory=factory) as gmail:
+        await gmail.send(
+            _email("a@example.com")
+        )  # worker hits the stale sendmail and reconnects
 
-    gmail._try_reconnect(lambda smtp: smtp.noop())
-    gmail._try_reconnect(lambda smtp: smtp.noop())
+        with gmail._lock:
+            assert factory.call_count == 2
+            assert gmail._smtp is fixed
 
-    assert factory.call_count == 1
+        # give the poller several cycles against the now-fixed connection
+        assert await _wait_until(gmail, lambda: fixed.calls.count("noop") >= 3)
+
+    assert factory.call_count == 2
+
+    # Phase 2: the poller fixes a stale connection; the worker must reuse it, not reconnect again.
+    stale = FakeSMTP(raise_on={"noop": SMTPServerDisconnected()})
+    fixed = FakeSMTP()
+    factory = FakeSMTPFactory([stale, fixed])
+
+    with Gmail("user", "pass", interval=0.01, default_factory=factory) as gmail:
+        # wait for the poller to hit the stale noop and reconnect before the worker sends anything
+        assert await _wait_until(gmail, lambda: factory.call_count == 2)
+
+        with gmail._lock:
+            assert gmail._smtp is fixed
+
+        await gmail.send(_email("a@example.com"))
+
+    assert factory.call_count == 2
+    assert fixed.calls.count("sendmail") == 1
 
 
 async def _test_queue_drain_throughput():

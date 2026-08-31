@@ -7,7 +7,7 @@ from pydantic_extra_types.phone_numbers import PhoneNumber
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from ..emails import send_email
+from ..emails import EmailNotSent
 
 
 class Submission(BaseModel):
@@ -41,6 +41,9 @@ async def process_submission(request: Request) -> Response:
             {"invalid_fields": [err["loc"][0] for err in e.errors()]}, status_code=400
         )
 
-    await send_email(submission.email, "booking_submission", {})
+    try:
+        await request.state.gmail.send_email(submission.email, "booking_submission", {})
+    except EmailNotSent:
+        return JSONResponse({}, status_code=500)
 
     return Response(status_code=200)

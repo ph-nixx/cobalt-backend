@@ -118,3 +118,60 @@ approaches tried and discarded before landing on the current design.
   masking the real exception, a socket-level timeout (10s) added to bound
   previously-unbounded blocking calls, and explicit exception chaining
   (`raise EmailNotSent from e`) added in `send()`.
+
+---
+
+# <2026-08-30>
+
+Designed a mocking strategy for `Gmail`, used it to write three unit test, 
+and a queue-drain throughput benchmark.
+
+- Compared mocking approaches for `Gmail`: subclassing to override `_smtp`, 
+  patching `smtplib.SMTP` at the point of use, or constructor
+  injection via a `default_factory` param. Chose injection "works like a normal function", no patching indirection.
+- First factory draft took `self: Gmail` as an argument despite only reading
+  class constants (`_HOST`/`_PORT`/`_TIMEOUT`). Simplified to
+  `Callable[[], SMTP] | None = None`; confirmed `_try_reconnect` uses the
+  injected factory on reconnect too, not just `__enter__`.
+- Wrote `FakeSMTP` (records calls, scriptable to raise once per method) and
+  `FakeSMTPFactory` (hands out a scripted sequence, counts calls) as the test doubles.
+- `test_bad_request_does_not_effect_preceding` and `test_nonlisted_exception_does_not_panic` 
+  run against a real `Gmail` instance with `FakeSMTP` injected; `test_no_redundant_reconnections`
+  instead unit-tests `_try_reconnect` directly, bypassing the poller/worker threads entirely for determinism.
+- Added `test_queue_drain_throughput`: report-only (prints elapsed time +
+  emails/sec, no assert threshold) measured ~9,400 emails/sec draining 500 queued sends with `FakeSMTP`. 
+  Rejected a hard-threshold assert (arbitrary, flaky on slow runners) and adding
+  `pytest-benchmark` (new dependency for one test).
+
+---
+
+# <2026-08-31>
+
+Hardening of the `gmail.py` `_worker` and `_poller` thread cooperation.
+
+- Replaced `test_no_redundant_reconnections` with two tests that actually run
+  `_poller`/`_worker` as real threads: `test_worker_reconnect_is_reused_by_poller`
+  and `test_poller_reconnect_is_reused_by_worker`. Scripted `FakeSMTP` to fail
+  once on a given method name rather than by call-count or timing, so whichever
+  thread gets there first triggers the reconnect.
+- Explained the mechanism: single-shot-by-name failures decouple the test from
+  *which* thread reconnects; polling with a bounded timeout (`_wait_until`)
+  checks the real condition on an interval instead of guessing a fixed
+  `sleep()` duration (this maked the outcome deterministic).
+- Asked whether the tests actually honor real non-deterministic thread timing.
+  Confirmed: yes, `Thread`/`Lock`/`Queue`/`Event` all behave as they would naturally.
+  However, the test thread read `gmail._smtp` and `factory.call_count` without holding 
+  `gmail._lock`, leaving a race window between `factory.call_count` incrementing and
+  `self._smtp` being reassigned inside `_try_reconnect`.
+- Considered injecting a lock. Concluded: no injection needed `gmail._lock`
+  already exists and is reachable from the test (no real private attributes in
+  Python); acquiring it directly around the test's ensures mutual exclusivity for all threads.
+  We used the existing `_lock` directly rather than injection.
+  `_wait_until` now takes `gmail` and checks its predicate under
+  `with gmail._lock:`; every direct read of `gmail._smtp`/`factory.call_count`
+  while the threads are still alive is exclusive. No production code was changed.
+- Merged the two reconnect tests into one,
+  `test_reconnect_is_reused_amongst_threads` chose two sequential phases
+  with separate `Gmail`/`FakeSMTP`/`factory` per phase over a single
+  continuous stale-twice scenario, keeping each phase's setup and assertions
+  independent.
