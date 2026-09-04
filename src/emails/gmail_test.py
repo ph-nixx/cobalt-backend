@@ -10,23 +10,13 @@ from pydantic import PrivateAttr
 
 from .gmail import EmailNotSent, Gmail, _Email
 
-_TEST_ENV = Environment(
-    loader=DictLoader({"stub.html": "", "mock.html": "<p>{{ greeting }}</p>"})
-)
+_TEST_ENV = Environment(loader=DictLoader({"stub.html": ""}))
 
 
 class _StubEmail(_Email):
     """Minimal _Email subclass with no content fields, for exercising Gmail's queue/thread logic independent of any real template."""
 
     _template_name: str = PrivateAttr(default="stub.html")
-
-
-class MockEmail(_Email):
-    """_Email subclass with a content field, for verifying _render builds correct headers and renders subclass fields into the template."""
-
-    _template_name: str = PrivateAttr(default="mock.html")
-
-    greeting: str
 
 
 class FakeSMTP:
@@ -174,25 +164,6 @@ async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
 
     assert factory.call_count == 2
     assert fixed.calls.count("send_message") == 1
-
-
-def test_mock_email_render_produces_expected_message() -> None:
-    """Verifies _render builds correct From/To/Subject headers, renders the subclass field into the html body, and excludes envelope fields from it."""
-    email = MockEmail(
-        sender="sender@example.com",
-        recipient="recipient@example.com",
-        subject="Test Subject",
-        greeting="Hello, World!",
-    )
-
-    msg = email._render(_TEST_ENV)
-
-    assert msg["From"] == "sender@example.com"
-    assert msg["To"] == "recipient@example.com"
-    assert msg["Subject"] == "Test Subject"
-    assert msg.get_content_type() == "text/html"
-    assert msg.get_content() == "<p>Hello, World!</p>\n"
-    assert "sender@example.com" not in msg.get_content()
 
 
 async def _test_queue_drain_throughput():

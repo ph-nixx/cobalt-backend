@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from zlib import crc32
 
+import httpx
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -15,7 +16,7 @@ from starlette.responses import Response
 
 from cfg import Settings
 
-from .paypal import PaypalEvent, _request_auth_protocol
+from .paypal import PaypalEvent, _webhook_auth_protocol
 
 CERT_URL = "https://api.sandbox.paypal.com/fake-cert.pem"
 
@@ -93,7 +94,11 @@ MALFORMED_EVENT_PAYLOAD = {
 @pytest.fixture(scope="module")
 def cfg() -> Settings:
     return Settings(
-        PAYPAL_WEBHOOK_ID="DEFAULT", PG_URL="", SMPT_USER="", SMPT_PASSWORD=""
+        PAYPAL_WEBHOOK_ID="DEFAULT",
+        PG_URL="",
+        SMTP_PASSWORD="",
+        SMTP_USER="",
+        PAYPAL_CREDS="",
     )
 
 
@@ -123,6 +128,7 @@ def build_paypal_request(
     body: bytes,
     rsa_key: RSAPrivateKey,
     cfg: Settings,
+    client: httpx.AsyncClient,
     *,
     headers: dict | None = None,
 ) -> Request:
@@ -146,7 +152,7 @@ def build_paypal_request(
         "method": "POST",
         "path": "/",
         "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
-        "state": {"cfg": cfg},
+        "state": {"cfg": cfg, "httpx": client},
     }
 
     sent = False
@@ -165,13 +171,15 @@ async def test_valid_payload_is_accepted(
     cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
 ):
     httpx_mock.add_response(url=CERT_URL, content=cert_pem)
-    req = build_paypal_request(
-        json.dumps(VALID_EVENT_PAYLOAD).encode(),
-        rsa_key,
-        cfg,
-    )
+    async with httpx.AsyncClient() as client:
+        req = build_paypal_request(
+            json.dumps(VALID_EVENT_PAYLOAD).encode(),
+            rsa_key,
+            cfg,
+            client,
+        )
 
-    response = await _request_auth_protocol(req)
+        response = await _webhook_auth_protocol(req)
     assert isinstance(response, PaypalEvent), "Valid HTTP request failed"
 
 
@@ -180,32 +188,35 @@ async def test_bad_headers_return_400(
 ):
     httpx_mock.add_response(url=CERT_URL, content=cert_pem)
     body = json.dumps(VALID_EVENT_PAYLOAD).encode()
-    req = build_paypal_request(
-        body,
-        rsa_key,
-        cfg,
-        headers={
-            "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
-            "paypal-cert-url": CERT_URL,
-            "paypal-transmission-sig": "unused",
-        },
-    )
-    response = await _request_auth_protocol(req)
-    assert isinstance(response, Response)
-    assert 400 <= response.status_code < 500, "Missing headers didn't return a 4xx"
+    async with httpx.AsyncClient() as client:
+        req = build_paypal_request(
+            body,
+            rsa_key,
+            cfg,
+            client,
+            headers={
+                "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
+                "paypal-cert-url": CERT_URL,
+                "paypal-transmission-sig": "unused",
+            },
+        )
+        response = await _webhook_auth_protocol(req)
+        assert isinstance(response, Response)
+        assert 400 <= response.status_code < 500, "Missing headers didn't return a 4xx"
 
-    req = build_paypal_request(
-        body,
-        rsa_key,
-        cfg,
-        headers={
-            "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
-            "paypal-transmission-time": "08-20-2006",
-            "paypal-cert-url": CERT_URL,
-            "paypal-transmission-sig": "fuck",
-        },
-    )
-    response = await _request_auth_protocol(req)
+        req = build_paypal_request(
+            body,
+            rsa_key,
+            cfg,
+            client,
+            headers={
+                "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
+                "paypal-transmission-time": "08-20-2006",
+                "paypal-cert-url": CERT_URL,
+                "paypal-transmission-sig": "fuck",
+            },
+        )
+        response = await _webhook_auth_protocol(req)
     assert isinstance(response, Response)
     assert 400 <= response.status_code < 500, "Bad signature didn't return a 4xx"
 
@@ -214,12 +225,14 @@ async def test_malformed_json_schema_returns_400(
     cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
 ):
     httpx_mock.add_response(url=CERT_URL, content=cert_pem)
-    req = build_paypal_request(
-        json.dumps(MALFORMED_EVENT_PAYLOAD).encode(),
-        rsa_key,
-        cfg,
-    )
+    async with httpx.AsyncClient() as client:
+        req = build_paypal_request(
+            json.dumps(MALFORMED_EVENT_PAYLOAD).encode(),
+            rsa_key,
+            cfg,
+            client,
+        )
 
-    response = await _request_auth_protocol(req)
+        response = await _webhook_auth_protocol(req)
     assert isinstance(response, Response)
     assert 400 <= response.status_code < 500, "Bad JSON schema didn't return a 4xx"

@@ -175,3 +175,84 @@ Hardening of the `gmail.py` `_worker` and `_poller` thread cooperation.
   with separate `Gmail`/`FakeSMTP`/`factory` per phase over a single
   continuous stale-twice scenario, keeping each phase's setup and assertions
   independent.
+
+Designed the Jinja2-templated email type system (`_Email` base + per-template
+pydantic subclasses) end to end, then reviewed the first pass at wiring a
+PayPal invoice into the booking-submission flow.
+
+- Design vision: a base `_Email` type handles all the common Jinja2 details
+  (collecting and rendering the template); each concrete email type is a
+  pydantic subclass of `_Email` bound to its own template; `Gmail.send(email:
+  _Email)` stays a simple, flexible interface — the caller picks a public
+  email type, supplies only its required fields, and everything else
+  (template selection, rendering, sending) is abstracted away.
+- The original `_send`/`render` passed raw rendered HTML straight to smtplib
+  with no MIME headers — not a valid email message (no
+  Subject/From/To/Content-Type).
+- `sender`/`recipient` were leaking into the Jinja render context via
+  `model_dump()` — fixed by marking them `Field(exclude=True)`.
+- `_Email` needed to be immutable (`frozen=True`) since instances cross a
+  thread boundary via the work queue before being rendered.
+- Jinja2 has no concept of an `email.message.Message` — it only ever produces
+  strings; MIME construction is entirely the job of stdlib
+  `email.message.EmailMessage`.
+- Jinja2 does support extracting a subject and body independently from one
+  template via named `{% block %}`s and `Template.blocks`, as an alternative
+  to a `subject` field on the model.
+- `EmailMessage.set_content(html, subtype="html")` gives a pure-HTML body;
+  `add_alternative(html, subtype="html")` after `set_content(text)` gives a
+  multipart text+HTML fallback.
+- `smtplib.SMTP.send_message(msg)` is preferable to `sendmail(...)` once you
+  have an `EmailMessage`, since it reads `From`/`To` straight from the
+  headers.
+- Rendering and transport should be separate responsibilities: `_Email._render`
+  builds the `EmailMessage`, `Gmail.send` is the only place that calls
+  `smtp.send_message`.
+- An empty/unset `subject` on `BookingLead` was not a bug — it was the still-open
+  design question of who owns subject text (model field vs. per-subclass
+  default vs. template block).
+- `jinja2.Environment` caches compiled templates automatically (default
+  `cache_size=400`, `auto_reload=True`); a separate `bytecode_cache=` option
+  exists only for persisting bytecode across process restarts.
+- `arbitrary_types_allowed=True` on `_Email.model_config` was dead
+  configuration — confirmed via source that `PhoneNumber` and `EmailStr` are
+  both pydantic-native and never needed it.
+- The `gmail_test.py` breakage went deeper than a rename: the old
+  `Email(template=Template(""))` pattern for content-agnostic test emails no
+  longer existed, and `Gmail` had no way to inject a test template source.
+- Chose an injectable `env: Environment | None` on `Gmail.__init__` over a
+  `MockEmail`-that-overrides-`_render`, to avoid test doubles needing to stay
+  in sync with `gmail.py` internals.
+- `_Email._render` requires no `Gmail` machinery to test — it's a pure
+  `(self, env) -> EmailMessage` function, so rendering correctness and
+  `Gmail`'s queue/thread/reconnect logic can and should be tested completely
+  independently.
+- That independent testability didn't actually depend on the earlier
+  render/transport separation — even the earlier fused `_send(self, smtp,
+  env)` was just as testable with a fake SMTP; the separation only improved
+  cleanliness.
+- Resolved `gmail_test.py` with a minimal `_StubEmail` (uses the real,
+  injected `env`, no override) for Gmail-plumbing tests, and renamed
+  `FakeSMTP.sendmail` → `send_message` to match production.
+- `EmailMessage.set_content(...)` appends a trailing `"\n"` to the body —
+  confirmed by direct execution, used to assert the exact raw HTML body in
+  `email_models_test.py`.
+- `pydantic_extra_types.PhoneNumber` requires the `phonenumbers` package at
+  import time; it wasn't declared as a dependency, so it was added via `uv add
+  phonenumbers`.
+- The `paypal_test.py` failures seen from a full `uv run pytest` were
+  unrelated to the email work — a pre-existing `Settings` field-naming issue.
+- Splitting `_Email`/`BookingLead` into `email_models.py`, with tests
+  correspondingly split (`_StubEmail` in `gmail_test.py`, `MockEmail` in
+  `email_models_test.py`), is a clean separation with no duplication.
+- `BookingLead.validate(submission)` in `process_submission` always raises a
+  `pydantic.ValidationError` — confirmed by direct reproduction — since
+  pydantic won't do attribute-based extraction from an unrelated model
+  without `from_attributes=True`, and even with that it would still fail on
+  the missing `sender`/`recipient` mapping and the `id: UUID` vs `id: str`
+  mismatch.
+- `create_invoice_draft` has multiple bugs: a stray literal `$` breaking both
+  `Authorization` header values; the invoice-draft call should use `Bearer`
+  rather than `Basic`; the request body should be sent via `json=` without
+  the extraneous `"body"` wrapper; and `timedelta(seconds=body.expires_in *
+  1000)` inflates the cached token's lifetime by 1000x.

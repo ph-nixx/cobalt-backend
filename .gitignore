@@ -13,3 +13,5 @@ wheels/
 # llm tooling
 .claude**
 .specify**
+
+legacy**
