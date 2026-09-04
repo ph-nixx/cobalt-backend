@@ -312,3 +312,39 @@ Testing:
   data-extraction correctness — something a mock can't catch. Unit tests
   keep mocking PayPal entirely; the e2e tier is opt-in only
   (`pytest -m e2e`).
+
+---
+
+# <2026-09-04>
+
+Diagnosed the remaining `submission_test.py` e2e failures after a PayPal
+sandbox-credentials refactor, then redesigned its request-payload fixture.
+
+- `create_invoice_draft` has a real side effect (creates a live PayPal
+  sandbox draft) as a kwarg of the `BookingLead(...)` constructor call in
+  `process_submission`, evaluated *before* `BookingLead`'s own field
+  validation. A `BookingLead` validation failure downstream still leaves a
+  real orphaned draft behind — every failed e2e run leaks a sandbox invoice.
+- PayPal's Invoicing API has no bulk-delete endpoint. Wrote a list-then-delete
+  curl script (paginate `GET /v2/invoicing/invoices`, filter
+  `status=="DRAFT"`, `DELETE` each) to clear leaked drafts, since the leak
+  above meant they accumulated across debugging runs.
+- `Detail.reference` (`webhooks/paypal.py`, typed `str`) compared directly
+  against `BookingLead.id`/`Submission.id` (typed `UUID4`) always fails even
+  when the underlying value is identical — `str == UUID` is never `True` in
+  Python. Fixed by retyping `Detail.reference` as `UUID4` so both sides
+  compare as real `UUID` instances.
+- The test's own debug message printed `sub.id` (the fixture's client-side
+  id) next to the invoice's actual reference and looked like a mismatch, but
+  that was expected, not a bug: `model_dump_json(exclude={"id"})` strips the
+  id from the request body before it's sent, so
+  `Submission.model_validate_json` on the server regenerates a brand-new id
+  via `default_factory=uuid4`. `sub.id` and the server-assigned id were never
+  meant to be the same value.
+- Redesigned the fixture in response: replaced the `sub: Submission` fixture
+  with a raw-dict `user_submission` fixture shaped exactly like what a client
+  actually posts (no `id` field at all). The unit test calls
+  `Submission.model_validate(user_submission)` internally when it needs a
+  real instance; the e2e test just `json.dumps`s the dict as the request
+  body. This removes the "two different Submission objects" confusion at its
+  root, since there's only ever one payload that mirrors real client input.
