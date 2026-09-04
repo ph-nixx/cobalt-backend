@@ -1,12 +1,12 @@
 from asyncio import Lock
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import phonenumbers
 from asyncpg import Pool
 from httpx import AsyncClient
-from pydantic import BaseModel, EmailStr, Field, HttpUrl, ValidationError
+from pydantic import UUID4, BaseModel, EmailStr, Field, HttpUrl, ValidationError
 from pydantic_extra_types.phone_numbers import PhoneNumber
 from starlette.background import BackgroundTask
 from starlette.requests import Request
@@ -38,7 +38,7 @@ DRAFT_TIMEOUT = 5.0  # seconds; mirrors legacy DRAFT_TIMEOUT_MS
 
 class Submission(BaseModel):
     # this field shouldn't be sent by the client, it's server side meta data
-    id: UUID = Field(default_factory=uuid4, init=False)
+    id: UUID4 = Field(default_factory=uuid4, init=False)
 
     # the only TS implementation allows the client to send the data and time seperately
     # this implementation forces the client to join them before sending

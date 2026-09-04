@@ -10,6 +10,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from pydantic import (
+    UUID4,
     AfterValidator,
     BaseModel,
     EmailStr,
@@ -25,28 +26,33 @@ from bookings import Submission
 # from . import logger
 
 
+class Detail(BaseModel):
+    invoice_number: str
+    reference: UUID4 | None = None
+
+
+class Amount(BaseModel):
+    currency_code: str
+    value: float
+
+
+class BillingInfo(BaseModel):
+    email_address: EmailStr
+
+
+class PrimaryRecipient(BaseModel):
+    billing_info: BillingInfo
+
+
+class Resource(BaseModel):
+    id: str
+    status: Literal["PAID"]
+    detail: Detail
+    amount: Amount
+    primary_recipients: list[PrimaryRecipient] | None = None
+
+
 class PaypalEvent(BaseModel):
-    class Resource(BaseModel):
-        class Detail(BaseModel):
-            invoice_number: str
-            reference: str | None = None
-
-        class Amount(BaseModel):
-            currency_code: str
-            value: float
-
-        class PrimaryRecipient(BaseModel):
-            class BillingInfo(BaseModel):
-                email_address: EmailStr
-
-            billing_info: BillingInfo
-
-        id: str
-        status: Literal["PAID"]
-        detail: Detail
-        amount: Amount
-        primary_recipients: list[PrimaryRecipient] | None = None
-
     id: str
     create_time: datetime
     resource_type: Literal["invoicing"]

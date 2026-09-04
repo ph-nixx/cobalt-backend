@@ -2,14 +2,7 @@ from datetime import datetime
 from email.message import EmailMessage
 
 from jinja2 import Environment
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    EmailStr,
-    Field,
-    HttpUrl,
-    PrivateAttr,
-)
+from pydantic import UUID4, BaseModel, ConfigDict, EmailStr, Field, HttpUrl, PrivateAttr
 from pydantic_extra_types.phone_numbers import PhoneNumber
 
 
@@ -38,7 +31,7 @@ class _Email(BaseModel):
 class BookingLead(_Email):
     _template_name: str = PrivateAttr(default="booking_lead.html")
 
-    id: str
+    id: UUID4
     datetime: datetime
     name: str
     email: str

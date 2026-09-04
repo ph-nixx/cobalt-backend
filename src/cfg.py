@@ -15,7 +15,6 @@ class Settings(BaseSettings):
     # WEBHOOK_ID is the sandbox default id
     PAYPAL_WEBHOOK_ID: str
     PAYPAL_CREDS: str
-    PAYPAL_SANDBOX_CREDS: str
     PAYPAL_OAUTH_URL: str = "https://api-m.paypal.com/v1/oauth2/token"
     PAYPAL_INVOICE_DRAFT_URL: str = "https://api-m.paypal.com/v2/invoicing/invoices"
     PG_URL: str
