@@ -99,6 +99,7 @@ def cfg() -> Settings:
         SMTP_PASSWORD="",
         SMTP_USER="",
         PAYPAL_CREDS="",
+        PAYPAL_SANDBOX_CREDS="",
     )
 
 

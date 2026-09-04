@@ -24,3 +24,7 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+markers = [
+    "e2e: hits real external services (PayPal sandbox); excluded by default, run with `pytest -m e2e`",
+]
+addopts = "-m 'not e2e'"

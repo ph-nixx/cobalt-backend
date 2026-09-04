@@ -256,3 +256,59 @@ PayPal invoice into the booking-submission flow.
   rather than `Basic`; the request body should be sent via `json=` without
   the extraneous `"body"` wrapper; and `timedelta(seconds=body.expires_in *
   1000)` inflates the cached token's lifetime by 1000x.
+
+---
+
+# <2026-09-03>
+
+Reviewed the file-level diffs (not commit messages) of the last three commits
+— `593c2da`, `0f6f8b6`, `1e60ec5` — to pull out the actual design and testing
+conclusions they encode.
+
+Design:
+
+- Email content and SMTP transport stay separate: `_Email`/`BookingLead`
+  (pydantic + Jinja2 rendering) in `email_models.py`, decoupled from
+  `Gmail`'s worker-thread transport — one model per template.
+- Shared clients/config route through `request.state` (`cfg`, `db`, `gmail`,
+  `httpx`) instead of each module owning its own — `paypal.py`'s standalone
+  `httpx.AsyncClient()` was replaced by the lifespan-managed shared one.
+- Domain models reused by inheritance, not duplicated: `webhooks.Conversion`
+  subclasses `bookings.Submission` rather than redefining the same fields.
+- PayPal OAuth uses one global token + lock (`PAYPAL_TOKEN`, `TOKEN_LOCK`) —
+  single-flight refresh so concurrent submissions don't each fetch a token.
+- DB persistence deliberately kept off the critical path via
+  `BackgroundTask`, running after the email/invoice-draft response is
+  already decided.
+- Security folded in as a design change, not a bolt-on: `paypal-cert-url`
+  now validated against a real PayPal host allowlist before the cert it
+  points to is trusted — closes a spoofing gap in the original auth flow.
+- PII minimized at the boundary: `Conversion` hashes email/phone (sha256)
+  before the `conversions` insert; raw contact info stays only in
+  `quote_requests`.
+- Spec docs (`specs/002-*`, `specs/003-*`) are disposable planning
+  scaffolding — deleted wholesale (`1e60ec5`) once the corresponding code
+  shipped, not kept as living documentation.
+
+Testing:
+
+- Tests land with the feature, not after — every substantive commit has
+  matching test churn (`submission_test.py` added, `email_models_test.py`
+  added, `paypal_test.py` rewritten, `gmail_test.py` trimmed).
+- `Gmail` unit tests were deliberately refocused on threading/queue
+  correctness rather than SMTP protocol details — that's the part of a
+  background-thread mailer that's actually risky to get wrong.
+- The one committed `submission_test.py` test targets the token-refresh race
+  condition specifically, using `pytest_httpx` to fully fake PayPal — unit
+  tests trust mocked externals and verify internal concurrency logic
+  instead.
+- `paypal_test.py` grew alongside both new capabilities at once (host
+  allowlist, conversion insert) — the security fix and the new business
+  logic were tested together, not separately.
+- Landed a second testing tier on top of that pattern: added a
+  `@pytest.mark.e2e` group to `submission_test.py`, excluded by default via
+  `addopts = "-m 'not e2e'"` in `pyproject.toml`, that hits real PayPal
+  sandbox (fake `db`/`gmail`, real `httpx`) to verify actual
+  data-extraction correctness — something a mock can't catch. Unit tests
+  keep mocking PayPal entirely; the e2e tier is opt-in only
+  (`pytest -m e2e`).
