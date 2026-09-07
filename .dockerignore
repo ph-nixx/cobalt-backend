@@ -1,0 +1,42 @@
+# flyctl launch added from .gitignore
+# Python-generated files
+**/__pycache__
+**/*.py[oc]
+**/build
+**/dist
+**/wheels
+**/*.egg-info
+
+# environments
+**/.venv
+**/.env**
+
+# llm tooling
+**/.claude**
+**/.specify**
+**/specs**
+
+**/legacy**
+
+**/logs**
+
+**/scripts**
+
+# flyctl launch added from .pytest_cache/.gitignore
+# Created by pytest automatically.
+.pytest_cache/**/*
+
+# flyctl launch added from .specify/.gitignore
+# Machine-local Spec Kit state — not meant to be shared.
+# Managed by the Specify CLI; safe to edit (your changes are preserved on refresh).
+
+# Local pointer to the current feature directory. Rewritten every time you
+# switch features, so it is per-checkout state rather than something to share.
+.specify/**/feature.json
+
+# Per-machine extension config overrides.
+.specify/**/extensions/*/local-config.yml
+
+# flyctl launch added from .venv/.gitignore
+.venv/**/*
+fly.toml
