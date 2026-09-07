@@ -348,3 +348,47 @@ sandbox-credentials refactor, then redesigned its request-payload fixture.
   real instance; the e2e test just `json.dumps`s the dict as the request
   body. This removes the "two different Submission objects" confusion at its
   root, since there's only ever one payload that mirrors real client input.
+
+---
+
+# <2026-09-07>
+
+Pre-deploy review of `src/` surfaced several correctness/security issues;
+worked through fixes for the top ones as an uncommitted diff on top of
+`49684b3` (`main.py`, `webhooks/paypal.py`).
+
+- Removed `debug=True` from the Starlette app in `main.py` — running with
+  debug on in prod meant any unhandled exception (e.g. the `Conversion`
+  crash below) leaked a full traceback, including source and local
+  variables, straight into the HTTP response body.
+- `Conversion` no longer subclasses `Submission`; it's now its own
+  `BaseModel` with only the fields the webhook's `SELECT` actually returns
+  (`id`, `email`, `phone`, `first_click`, `gclid`, `gbraid`, `wbraid`).
+  Subclassing `Submission` meant `Conversion.model_validate(dict(row))`
+  demanded `name`/`datetime`/`vehicle`/`service`, which that query never
+  fetches — every successful, correctly-signed `INVOICE.PAID` webhook hit
+  this and raised `pydantic.ValidationError` on the happy path. Conversion
+  tracking was 100% broken.
+- Decided to keep the `400` responses in `_webhook_auth_protocol` for bad
+  headers/signature/schema — reasoning: if PayPal itself sent something
+  malformed, telling them via `400` is correct and lets a legitimate resend
+  happen. This overrides an earlier review suggestion (based on the
+  project's own webhook contract doc, which calls for always-200 to avoid
+  retry storms) to make all four error paths return `200`.
+- Changed the cert-fetch-failure path from `500` to `200` — that failure is
+  ours (can't reach PayPal's cert endpoint), not a malformed request from
+  PayPal, so it shouldn't trigger PayPal retries. This drops the `500`
+  decision made in `5dede2f` (carried unchanged into `49684b3`). Relies on
+  the existing `logger.error` call there to surface the problem via the
+  Gmail alert handler instead of an HTTP status.
+- Deleted the unused `_verify_signature` helper (and its now-dead
+  `InvalidSignature` import) — it was extracted in `49684b3` but never
+  actually wired in; the inline `verify()` call lower in the function
+  duplicated the same logic. Drops that extraction decision entirely rather
+  than fixing the duplication by calling the helper.
+
+Flagged but not yet fixed: the 30-day click-id staleness gate (FR-012) is
+unimplemented, conversions with no ad click-id are silently dropped instead
+of alerted (FR-021), the PayPal cert is cached for the process lifetime with
+no rotation handling, and `paypal_test.py`'s coverage of the
+signature-verification-failure path was lost in `49684b3`'s test rewrite.

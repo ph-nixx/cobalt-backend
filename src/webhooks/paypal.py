@@ -6,7 +6,6 @@ from zlib import crc32
 
 from asyncpg import Pool
 from cryptography import x509
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from pydantic import (
@@ -21,7 +20,7 @@ from pydantic import (
 from starlette.requests import Request
 from starlette.responses import Response
 
-from bookings import Submission
+from emails import E164PhoneNumber
 
 from . import logger
 
@@ -60,7 +59,15 @@ class PaypalEvent(BaseModel):
     resource: Resource
 
 
-class Conversion(Submission):
+class Conversion(BaseModel):
+    id: UUID4
+    email: EmailStr
+    phone: E164PhoneNumber
+    first_click: datetime | None = None
+    gclid: str | None = None
+    gbraid: str | None = None
+    wbraid: str | None = None
+
     def has_ads_identifier(self) -> bool:
         return (
             self.gclid is not None or self.gbraid is not None or self.wbraid is not None
@@ -150,19 +157,6 @@ async def record_payed_invoice(request: Request) -> Response:
     return Response(status_code=200)
 
 
-def _verify_signature(cert: x509.Certificate, signature: bytes, data: bytes) -> bool:
-    try:
-        cert.public_key().verify(
-            signature=signature,
-            data=data,
-            padding=padding.PKCS1v15(),
-            algorithm=hashes.SHA256(),
-        )
-        return True
-    except InvalidSignature:
-        return False
-
-
 async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
     """Run the proprietary Paypal auth flow on a incoming POST request"""
     try:
@@ -180,7 +174,7 @@ async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
                 headers.url,
                 req.status_code,
             )
-            return Response(status_code=500)
+            return Response(status_code=200)
 
         _CACHED_PAYPAL_CERT = x509.load_pem_x509_certificate(await req.aread())
 
