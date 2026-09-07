@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str
     COBALT_GMAIL: str
     LOG_PATH: Path = Field(default=Path("logs/app.jsonl"))
+    AUTH_TOKEN: str
 
 
 class State(TypedDict):
@@ -117,7 +118,7 @@ class GmailAlertHandler(logging.Handler):
         super().__init__(level=level)
         self._gmail = gmail
         self._sender = cfg.SMTP_USER
-        self._recipient = cfg.COBALT_GMAIL
+        self._recipient = cfg.SMTP_USER
         self._loop = asyncio.get_running_loop()
 
     @override
@@ -155,6 +156,7 @@ class Log:
         file_handler = logging.handlers.RotatingFileHandler(
             filename=cfg.LOG_PATH, maxBytes=250_000, backupCount=3
         )
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(
             JSONLFormatter(
                 fmt_keys={

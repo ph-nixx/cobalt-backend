@@ -92,6 +92,8 @@ _VALID_PAYPAL_CERT_HOSTS = frozenset(
     }
 )
 
+_CACHED_PAYPAL_CERT: x509.Certificate | None = None
+
 
 def validate_paypal_host(value: HttpUrl) -> HttpUrl:
     if value.scheme == "https" and value.host in _VALID_PAYPAL_CERT_HOSTS:
@@ -148,43 +150,58 @@ async def record_payed_invoice(request: Request) -> Response:
     return Response(status_code=200)
 
 
+def _verify_signature(cert: x509.Certificate, signature: bytes, data: bytes) -> bool:
+    try:
+        cert.public_key().verify(
+            signature=signature,
+            data=data,
+            padding=padding.PKCS1v15(),
+            algorithm=hashes.SHA256(),
+        )
+        return True
+    except InvalidSignature:
+        return False
+
+
 async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
     """Run the proprietary Paypal auth flow on a incoming POST request"""
     try:
         headers = PaypalAuthHeaders.model_validate(request.headers)
     except ValidationError:
         logger.warning("Rejected paypal webhook: invalid header schema")
-        return Response(
-            "Invalid paypal request header schema or values", status_code=400
-        )
+        return Response(status_code=400)
 
-    cert_req = await request.state.httpx.get(str(headers.url))
-    if cert_req.is_error:
-        logger.error(
-            "Failed to fetch paypal cert from %s: status=%s",
-            headers.url,
-            cert_req.status_code,
-        )
-        return Response("Internal HTTP request failure", status_code=500)
+    global _CACHED_PAYPAL_CERT
+    if _CACHED_PAYPAL_CERT is None:
+        req = await request.state.httpx.get(str(headers.url))
+        if req.is_error:
+            logger.error(
+                "Failed to fetch paypal cert from %s: status=%s",
+                headers.url,
+                req.status_code,
+            )
+            return Response(status_code=500)
 
-    cert_bytes = await cert_req.aread()
-    cert = x509.load_pem_x509_certificate(cert_bytes)
+        _CACHED_PAYPAL_CERT = x509.load_pem_x509_certificate(await req.aread())
+
     body = await request.body()
     crc = crc32(body)
+    signature = base64.b64decode(headers.signature)
+    data = f"{headers.id}|{headers.time}|{request.state.cfg.PAYPAL_WEBHOOK_ID}|{crc}".encode()
+
     try:
-        cert.public_key().verify(
-            signature=base64.b64decode(headers.signature),
-            data=f"{headers.id}|{headers.time}|{request.state.cfg.PAYPAL_WEBHOOK_ID}|{crc}".encode(),
+        _CACHED_PAYPAL_CERT.public_key().verify(
+            signature=signature,
+            data=data,
             padding=padding.PKCS1v15(),
             algorithm=hashes.SHA256(),
         )
-    except InvalidSignature:
+    except Exception:
         logger.warning(
-            "Rejected paypal webhook txn=%s: signature verification failed", headers.id
+            "Rejected paypal webhook txn=%s: signature verification failed",
+            headers.id,
         )
-        return Response(
-            "Content hash did not match expected signature", status_code=400
-        )
+        return Response(status_code=400)
 
     try:
         return PaypalEvent.model_validate_json(body)
@@ -192,4 +209,4 @@ async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
         logger.warning(
             "Rejected paypal webhook txn=%s: invalid event JSON schema", headers.id
         )
-        return Response("Invalid JSON schema", status_code=400)
+        return Response(status_code=400)

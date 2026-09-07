@@ -204,28 +204,24 @@ async def _test_queue_drain_throughput():
     )
 
 
-class _Settings(Settings):
-    CHROME_PROFILE_DIR: Path
-
-
 @pytest.fixture
-def e2e_settings() -> _Settings:
+def settings() -> Settings:
     """Reads SMTP creds and the Chrome profile dir needed for a live Gmail run from .env.local."""
-    return _Settings(_env_file=_ENV_FILE)
+    return Settings(_env_file=_ENV_FILE)
 
 
 @pytest.mark.e2e
-async def _test_html_renders_properly_in_gmail(e2e_settings: _Settings):
+async def _test_html_renders_properly_in_gmail(settings: Settings):
     """When a email is sent from a live gmail user the html renders correctly."""
     marker = str(uuid4())
     email = _RenderCheckEmail(
-        sender=e2e_settings.SMTP_USER,
-        recipient=e2e_settings.SMTP_USER,
+        sender=settings.SMTP_USER,
+        recipient=settings.SMTP_USER,
         subject=marker,
         marker=marker,
     )
 
     with Gmail(
-        e2e_settings.SMTP_USER, e2e_settings.SMTP_PASSWORD, env=_RENDER_CHECK_ENV
+        settings.SMTP_USER, settings.SMTP_PASSWORD, env=_RENDER_CHECK_ENV
     ) as gmail:
         await gmail.send(email)

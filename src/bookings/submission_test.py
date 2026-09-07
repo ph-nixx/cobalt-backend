@@ -32,6 +32,7 @@ def cfg() -> Settings:
         SMTP_USER="",
         SMTP_PASSWORD="",
         COBALT_GMAIL="",
+        AUTH_TOKEN="test-token",
     )
 
 
@@ -144,6 +145,9 @@ async def test_submission_draft_is_created_then_email_is_sent(
                     "db": fake_db,
                     "gmail": fake_gmail,
                 },
+                "headers": [
+                    (b"authorization", f"Bearer {sandbox_cfg.AUTH_TOKEN}".encode()),
+                ],
             },
             receive=receive,
         )

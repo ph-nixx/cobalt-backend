@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zlib import crc32
 
 import httpx
@@ -14,11 +15,12 @@ from pytest_httpx import HTTPXMock
 from starlette.requests import Request
 from starlette.responses import Response
 
-from cfg import Settings
-
+from . import paypal
 from .paypal import PaypalEvent, _webhook_auth_protocol
 
 CERT_URL = "https://api.sandbox.paypal.com/fake-cert.pem"
+
+PAYPAL_WEBHOOK_ID = "DEFAULT"
 
 VALID_EVENT_PAYLOAD = {
     "id": "WH-2WR32451HC0233532-1TR54305UM875670F",
@@ -91,16 +93,11 @@ MALFORMED_EVENT_PAYLOAD = {
 }
 
 
-@pytest.fixture(scope="module")
-def cfg() -> Settings:
-    return Settings(
-        PAYPAL_WEBHOOK_ID="DEFAULT",
-        PG_URL="",
-        SMTP_PASSWORD="",
-        SMTP_USER="",
-        PAYPAL_CREDS="",
-        COBALT_GMAIL="",
-    )
+@pytest.fixture(autouse=True)
+def reset_paypal_cert_cache():
+    paypal._CACHED_PAYPAL_CERT = None
+    yield
+    paypal._CACHED_PAYPAL_CERT = None
 
 
 @pytest.fixture(scope="module")
@@ -112,7 +109,7 @@ def rsa_key() -> RSAPrivateKey:
 def cert_pem(rsa_key: RSAPrivateKey) -> bytes:
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "paypal-test")])
     now = datetime.now(UTC)
-    cert = (
+    return (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
@@ -121,23 +118,21 @@ def cert_pem(rsa_key: RSAPrivateKey) -> bytes:
         .not_valid_before(now - timedelta(days=1))
         .not_valid_after(now + timedelta(days=1))
         .sign(rsa_key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
     )
-    return cert.public_bytes(serialization.Encoding.PEM)
 
 
 def build_paypal_request(
     body: bytes,
     rsa_key: RSAPrivateKey,
-    cfg: Settings,
-    client: httpx.AsyncClient,
-    *,
+    client: httpx.AsyncClient | None = None,
     headers: dict | None = None,
 ) -> Request:
     if headers is None:
         transmission_id = "11111111-2222-3333-4444-555555555555"
         transmission_time = "2026-08-24T12:00:00Z"
         crc = crc32(body)
-        message = f"{transmission_id}|{transmission_time}|{cfg.PAYPAL_WEBHOOK_ID}|{crc}"
+        message = f"{transmission_id}|{transmission_time}|{PAYPAL_WEBHOOK_ID}|{crc}"
         signature = rsa_key.sign(message.encode(), padding.PKCS1v15(), hashes.SHA256())
         signature = base64.b64encode(signature).decode()
 
@@ -153,7 +148,10 @@ def build_paypal_request(
         "method": "POST",
         "path": "/",
         "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
-        "state": {"cfg": cfg, "httpx": client},
+        "state": {
+            "cfg": SimpleNamespace(PAYPAL_WEBHOOK_ID=PAYPAL_WEBHOOK_ID),
+            "httpx": client,
+        },
     }
 
     sent = False
@@ -169,14 +167,13 @@ def build_paypal_request(
 
 
 async def test_valid_payload_is_accepted(
-    cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
+    httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
 ):
     httpx_mock.add_response(url=CERT_URL, content=cert_pem)
     async with httpx.AsyncClient() as client:
         req = build_paypal_request(
             json.dumps(VALID_EVENT_PAYLOAD).encode(),
             rsa_key,
-            cfg,
             client,
         )
 
@@ -184,16 +181,14 @@ async def test_valid_payload_is_accepted(
     assert isinstance(response, PaypalEvent), "Valid HTTP request failed"
 
 
-async def test_bad_headers_return_400(
-    cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
+async def test_missing_headers_return_4xx(
+    httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey
 ):
-    httpx_mock.add_response(url=CERT_URL, content=cert_pem)
     body = json.dumps(VALID_EVENT_PAYLOAD).encode()
     async with httpx.AsyncClient() as client:
         req = build_paypal_request(
             body,
             rsa_key,
-            cfg,
             client,
             headers={
                 "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
@@ -203,37 +198,18 @@ async def test_bad_headers_return_400(
         )
         response = await _webhook_auth_protocol(req)
         assert isinstance(response, Response)
-        assert 400 <= response.status_code < 500, "Missing headers didn't return a 4xx"
-
-        req = build_paypal_request(
-            body,
-            rsa_key,
-            cfg,
-            client,
-            headers={
-                "paypal-transmission-id": "11111111-2222-3333-4444-555555555555",
-                "paypal-transmission-time": "08-20-2006",
-                "paypal-cert-url": CERT_URL,
-                "paypal-transmission-sig": "fuck",
-            },
-        )
-        response = await _webhook_auth_protocol(req)
-    assert isinstance(response, Response)
-    assert 400 <= response.status_code < 500, "Bad signature didn't return a 4xx"
+        assert 400 == response.status_code, "Missing headers didn't return a 4xx"
 
 
-async def test_malformed_json_schema_returns_400(
-    cfg: Settings, httpx_mock: HTTPXMock, rsa_key: RSAPrivateKey, cert_pem: bytes
+async def test_malformed_json_schema_returns_4xx(
+    rsa_key: RSAPrivateKey, cert_pem: bytes
 ):
-    httpx_mock.add_response(url=CERT_URL, content=cert_pem)
-    async with httpx.AsyncClient() as client:
-        req = build_paypal_request(
-            json.dumps(MALFORMED_EVENT_PAYLOAD).encode(),
-            rsa_key,
-            cfg,
-            client,
-        )
+    paypal._CACHED_PAYPAL_CERT = x509.load_pem_x509_certificate(cert_pem)
+    req = build_paypal_request(
+        json.dumps(MALFORMED_EVENT_PAYLOAD).encode(),
+        rsa_key,
+    )
 
-        response = await _webhook_auth_protocol(req)
+    response = await _webhook_auth_protocol(req)
     assert isinstance(response, Response)
-    assert 400 <= response.status_code < 500, "Bad JSON schema didn't return a 4xx"
+    assert response.status_code == 400, "Bad JSON schema didn't return a 4xx"

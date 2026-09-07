@@ -3,8 +3,7 @@ from starlette.applications import Starlette
 
 import bookings
 import webhooks
-
-from .cfg import lifespan
+from cfg import lifespan
 
 if __name__ == "__main__":
     app = Starlette(

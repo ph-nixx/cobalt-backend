@@ -1,5 +1,6 @@
 from asyncio import Lock
 from datetime import UTC, date, datetime, timedelta
+from secrets import compare_digest
 from typing import Literal
 from uuid import uuid4
 
@@ -7,21 +8,16 @@ import phonenumbers
 from asyncpg import Pool
 from httpx import AsyncClient
 from pydantic import UUID4, BaseModel, EmailStr, Field, HttpUrl, ValidationError
-from pydantic_extra_types.phone_numbers import PhoneNumber
 from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from cfg import Settings
-from emails import BookingLead, EmailNotSent
+from emails import BookingLead, E164PhoneNumber, EmailNotSent
 
 from . import logger
 
 type InvoiceDraftURL = HttpUrl
-
-
-class E164PhoneNumber(PhoneNumber):
-    phone_format = "E164"
 
 
 class PaypalToken(BaseModel):
@@ -69,15 +65,21 @@ class Submission(BaseModel):
 
 
 async def process_submission(request: Request) -> Response:
+    cfg: Settings = request.state.cfg
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not compare_digest(token, cfg.AUTH_TOKEN):
+        return JSONResponse({}, status_code=401)
+
     try:
         submission = Submission.model_validate_json(await request.body())
     except ValidationError as e:
+        invalid_fields = [err.get("loc")[0] for err in e.errors() if err.get("loc")]
         return JSONResponse(
-            {"invalid_fields": [err["loc"][0] for err in e.errors()]}, status_code=400
+            {"invalid_fields": invalid_fields} if invalid_fields else {},
+            status_code=400,
         )
 
     try:
-        cfg: Settings = request.state.cfg
         await request.state.gmail.send(
             BookingLead(
                 **submission.model_dump(),
@@ -96,20 +98,29 @@ async def process_submission(request: Request) -> Response:
 
 
 async def persist_submission(submission: Submission, db: Pool):
-    await db.execute(
-        """
-        INSERT INTO quote_requests (
-            id, 
-            email, 
-            phone, 
-            gclid, 
-            gbraid, 
-            wbraid, 
-            first_click
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """,
-        *submission.as_row(),
-    )
+    try:
+        await db.execute(
+            """
+            INSERT INTO quote_requests (
+                id,
+                email,
+                phone,
+                gclid,
+                gbraid,
+                wbraid,
+                first_click
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
+            *submission.as_row(),
+        )
+    except Exception as e:
+        logger.error(
+            "Failed to persist submission %s: %s",
+            submission.id,
+            e,
+            extra={"error_type": type(e).__name__, "submission_id": str(submission.id)},
+            exc_info=True,
+        )
 
 
 async def create_invoice_draft(
