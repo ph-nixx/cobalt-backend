@@ -2,21 +2,37 @@ import asyncio
 import time
 from collections.abc import Callable
 from email.message import EmailMessage
+from pathlib import Path
 from smtplib import SMTPServerDisconnected
+from uuid import uuid4
 
 import pytest
 from jinja2 import DictLoader, Environment
 from pydantic import PrivateAttr
 
+from cfg import Settings
+
 from .gmail import EmailNotSent, Gmail, _Email
 
 _TEST_ENV = Environment(loader=DictLoader({"stub.html": ""}))
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env.local"
+_RENDER_CHECK_ENV = Environment(
+    loader=DictLoader({"render_check.html": "<p>{{ marker }}</p>"})
+)
 
 
 class _StubEmail(_Email):
     """Minimal _Email subclass with no content fields, for exercising Gmail's queue/thread logic independent of any real template."""
 
     _template_name: str = PrivateAttr(default="stub.html")
+
+
+class _RenderCheckEmail(_Email):
+    """_Email variant whose template renders a unique marker string, so a live Gmail render can be checked for that marker's presence."""
+
+    _template_name: str = PrivateAttr(default="render_check.html")
+
+    marker: str
 
 
 class FakeSMTP:
@@ -186,3 +202,30 @@ async def _test_queue_drain_throughput():
         f"\ndrained {email_count} emails in {elapsed:.4f}s "
         f"({email_count / elapsed:,.0f} emails/sec)"
     )
+
+
+class _Settings(Settings):
+    CHROME_PROFILE_DIR: Path
+
+
+@pytest.fixture
+def e2e_settings() -> _Settings:
+    """Reads SMTP creds and the Chrome profile dir needed for a live Gmail run from .env.local."""
+    return _Settings(_env_file=_ENV_FILE)
+
+
+@pytest.mark.e2e
+async def _test_html_renders_properly_in_gmail(e2e_settings: _Settings):
+    """When a email is sent from a live gmail user the html renders correctly."""
+    marker = str(uuid4())
+    email = _RenderCheckEmail(
+        sender=e2e_settings.SMTP_USER,
+        recipient=e2e_settings.SMTP_USER,
+        subject=marker,
+        marker=marker,
+    )
+
+    with Gmail(
+        e2e_settings.SMTP_USER, e2e_settings.SMTP_PASSWORD, env=_RENDER_CHECK_ENV
+    ) as gmail:
+        await gmail.send(email)
