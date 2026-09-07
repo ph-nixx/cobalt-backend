@@ -15,3 +15,5 @@ wheels/
 .specify**
 
 legacy**
+
+logs**

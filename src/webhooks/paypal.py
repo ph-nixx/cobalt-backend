@@ -23,7 +23,7 @@ from starlette.responses import Response
 
 from bookings import Submission
 
-# from . import logger
+from . import logger
 
 
 class Detail(BaseModel):
@@ -144,6 +144,7 @@ async def record_payed_invoice(request: Request) -> Response:
         *conversion._as_row(event),
     )
 
+    logger.info("Recorded conversion for txn=%s quote_id=%s", event.id, conversion.id)
     return Response(status_code=200)
 
 
@@ -152,12 +153,18 @@ async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
     try:
         headers = PaypalAuthHeaders.model_validate(request.headers)
     except ValidationError:
+        logger.warning("Rejected paypal webhook: invalid header schema")
         return Response(
             "Invalid paypal request header schema or values", status_code=400
         )
 
     cert_req = await request.state.httpx.get(str(headers.url))
     if cert_req.is_error:
+        logger.error(
+            "Failed to fetch paypal cert from %s: status=%s",
+            headers.url,
+            cert_req.status_code,
+        )
         return Response("Internal HTTP request failure", status_code=500)
 
     cert_bytes = await cert_req.aread()
@@ -172,6 +179,9 @@ async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
             algorithm=hashes.SHA256(),
         )
     except InvalidSignature:
+        logger.warning(
+            "Rejected paypal webhook txn=%s: signature verification failed", headers.id
+        )
         return Response(
             "Content hash did not match expected signature", status_code=400
         )
@@ -179,4 +189,7 @@ async def _webhook_auth_protocol(request: Request) -> PaypalEvent | Response:
     try:
         return PaypalEvent.model_validate_json(body)
     except ValidationError:
+        logger.warning(
+            "Rejected paypal webhook txn=%s: invalid event JSON schema", headers.id
+        )
         return Response("Invalid JSON schema", status_code=400)

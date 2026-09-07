@@ -31,6 +31,7 @@ def cfg() -> Settings:
         PG_URL="",
         SMTP_USER="",
         SMTP_PASSWORD="",
+        COBALT_GMAIL="",
     )
 
 

@@ -82,7 +82,7 @@ async def process_submission(request: Request) -> Response:
             BookingLead(
                 **submission.model_dump(),
                 sender=cfg.SMTP_USER,
-                recipient=cfg.SMTP_USER,
+                recipient=cfg.COBALT_GMAIL,
                 invoice_url=await create_invoice_draft(submission, request),
             )
         )

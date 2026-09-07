@@ -45,3 +45,13 @@ class BookingLead(_Email):
     # @property
     # def invoice_url(self) -> str:
     #     return f"https://cobalttransport.com/api/bookings/{self.id}/invoice"
+
+
+class LogAlert(_Email):
+    _template_name: str = PrivateAttr(default="log_alert.html")
+
+    level: str
+    logger_name: str
+    message: str
+    timestamp: datetime
+    exc_info: str | None = None
