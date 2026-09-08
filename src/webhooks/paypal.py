@@ -20,7 +20,7 @@ from pydantic import (
 from starlette.requests import Request
 from starlette.responses import Response
 
-from emails import E164PhoneNumber
+from bookings.types import E164
 
 from . import logger
 
@@ -62,7 +62,7 @@ class PaypalEvent(BaseModel):
 class Conversion(BaseModel):
     id: UUID4
     email: EmailStr
-    phone: E164PhoneNumber
+    phone: E164
     first_click: datetime | None = None
     gclid: str | None = None
     gbraid: str | None = None

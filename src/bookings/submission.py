@@ -13,9 +13,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from cfg import Settings
-from emails import BookingLead, E164PhoneNumber, EmailNotSent
+from emails import BookingLead, EmailNotSent
 
 from . import logger
+from .types import E164
 
 type InvoiceDraftURL = HttpUrl
 
@@ -41,7 +42,7 @@ class Submission(BaseModel):
     name: str
     datetime: datetime
     email: EmailStr
-    phone: E164PhoneNumber
+    phone: E164
 
     # the backend controls what form submission values are valid
     vehicle: Literal["suv", "sprinter"]

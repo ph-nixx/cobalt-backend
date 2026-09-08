@@ -13,7 +13,12 @@ from pydantic import (
     PlainSerializer,
     PrivateAttr,
 )
-from pydantic_extra_types.phone_numbers import PhoneNumber
+
+from bookings.types import E164
+
+
+def _sanitize_header(value: str) -> str:
+    return value.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
 
 class _Email(BaseModel):
@@ -32,14 +37,10 @@ class _Email(BaseModel):
         html = template.render(self.model_dump())
         msg = EmailMessage()
         msg.set_content(html, subtype="html")
-        msg["From"] = self.sender
-        msg["To"] = self.recipient
-        msg["Subject"] = self.subject
+        msg["From"] = _sanitize_header(self.sender)
+        msg["To"] = _sanitize_header(self.recipient)
+        msg["Subject"] = _sanitize_header(self.subject)
         return msg
-
-
-class E164PhoneNumber(PhoneNumber):
-    phone_format = "E164"
 
 
 def english_date(value: datetime) -> str:
@@ -54,7 +55,7 @@ class BookingLead(_Email):
     datetime: Annotated[datetime, PlainSerializer(english_date)]
     name: str
     email: str
-    phone: E164PhoneNumber
+    phone: E164
     service: str
     vehicle: str
     invoice_url: HttpUrl | None = None
