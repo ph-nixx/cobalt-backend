@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable
 from email.message import EmailMessage
 from pathlib import Path
-from smtplib import SMTPServerDisconnected
+from smtplib import SMTPRecipientsRefused, SMTPSenderRefused, SMTPServerDisconnected
 from uuid import uuid4
 
 import pytest
@@ -107,7 +107,7 @@ async def test_bad_request_does_not_effect_preceding():
     factory = FakeSMTPFactory([smtp])
 
     with Gmail(
-        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+        "user", "pass", smtp_poll=10_000, default_factory=factory, env=_TEST_ENV
     ) as gmail:
         results = await asyncio.gather(
             gmail.send(_email("bad@example.com")),
@@ -127,7 +127,7 @@ async def test_nonlisted_exception_does_not_panic():
     factory = FakeSMTPFactory([smtp])
 
     with Gmail(
-        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+        "user", "pass", smtp_poll=10_000, default_factory=factory, env=_TEST_ENV
     ) as gmail:
         with pytest.raises(EmailNotSent):
             await gmail.send(_email("bad@example.com"))
@@ -147,7 +147,7 @@ async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
     factory = FakeSMTPFactory([stale, fixed])
 
     with Gmail(
-        "user", "pass", interval=0.01, default_factory=factory, env=_TEST_ENV
+        "user", "pass", smtp_poll=0.01, default_factory=factory, env=_TEST_ENV
     ) as gmail:
         await gmail.send(
             _email("a@example.com")
@@ -168,7 +168,7 @@ async def test_reconnect_is_reused_amongst_threads_not_replaced_redundantly():
     factory = FakeSMTPFactory([stale, fixed])
 
     with Gmail(
-        "user", "pass", interval=0.01, default_factory=factory, env=_TEST_ENV
+        "user", "pass", smtp_poll=0.01, default_factory=factory, env=_TEST_ENV
     ) as gmail:
         # wait for the poller to hit the stale noop and reconnect before the worker sends anything
         assert await _wait_until(gmail, lambda: factory.call_count == 2)
@@ -189,7 +189,7 @@ async def _test_queue_drain_throughput():
     factory = FakeSMTPFactory([smtp])
 
     with Gmail(
-        "user", "pass", interval=10_000, default_factory=factory, env=_TEST_ENV
+        "user", "pass", smtp_poll=10_000, default_factory=factory, env=_TEST_ENV
     ) as gmail:
         start = time.perf_counter()
         await asyncio.gather(
@@ -222,6 +222,9 @@ async def _test_html_renders_properly_in_gmail(settings: Settings):
     )
 
     with Gmail(
-        settings.SMTP_USER, settings.SMTP_PASSWORD, env=_RENDER_CHECK_ENV
+        settings.SMTP_USER,
+        settings.SMTP_PASSWORD,
+        smtp_poll=settings.SMTP_POLL,
+        env=_RENDER_CHECK_ENV,
     ) as gmail:
         await gmail.send(email)

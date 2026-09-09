@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     PG_MAX_POOL: int = Field(gt=0, le=20, default=10)
     SMTP_USER: str
     SMTP_PASSWORD: str
+    SMTP_POLL: int = Field(gt=5, le=120, default=120)
     COBALT_GMAIL: str
     LOG_PATH: Path = Field(default=Path("logs/app.jsonl"))
     AUTH_TOKEN: str
@@ -200,7 +201,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[State]:
     async with asyncpg.create_pool(
         cfg.PG_URL, min_size=cfg.PG_MIN_POOL, max_size=cfg.PG_MAX_POOL
     ) as db:
-        with Gmail(cfg.SMTP_USER, cfg.SMTP_PASSWORD) as gmail:
+        with Gmail(cfg.SMTP_USER, cfg.SMTP_PASSWORD, cfg.SMTP_POLL) as gmail:
             with Log(gmail, cfg):
                 async with AsyncClient() as httpx:
                     yield State(cfg=cfg, db=db, gmail=gmail, httpx=httpx)

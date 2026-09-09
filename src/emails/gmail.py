@@ -1,7 +1,12 @@
 import asyncio
 from collections.abc import Callable
 from queue import Queue, ShutDown
-from smtplib import SMTP, SMTPServerDisconnected
+from smtplib import (
+    SMTP,
+    SMTPRecipientsRefused,
+    SMTPResponseException,
+    SMTPServerDisconnected,
+)
 from threading import Event, Lock, Thread
 
 from jinja2 import Environment, PackageLoader, select_autoescape
@@ -24,7 +29,7 @@ class Gmail:
     """
     Inteded to be used with a context manager.
 
-    * interval: seconds between each poll
+    * smtp_poll: seconds between each poll
     """
 
     _HOST = "smtp.gmail.com"
@@ -35,7 +40,7 @@ class Gmail:
         self,
         smtp_user: str,
         smtp_password: str,
-        interval: int = 300,
+        smtp_poll: int,
         default_factory: Callable[[], SMTP] | None = None,
         env: Environment | None = None,
     ) -> None:
@@ -57,7 +62,9 @@ class Gmail:
         self._work: Queue[Work] = Queue()
         self._lock = Lock()
         self._stop = Event()
-        self._poller_thread = Thread(target=lambda: self._poller(interval), daemon=True)
+        self._poller_thread = Thread(
+            target=lambda: self._poller(smtp_poll), daemon=True
+        )
         self._worker_thread = Thread(target=self._worker, daemon=True)
 
     def __enter__(self) -> Gmail:
@@ -114,8 +121,7 @@ class Gmail:
 
             try:
                 with self._lock:
-                    # we should extra any relavent info from _SendErrs and log it
-                    _ = self._with_reconnect(req)
+                    self._with_reconnect(req)
                     loop.call_soon_threadsafe(fut.set_result, None)
                     continue
             except Exception as e:
@@ -135,10 +141,28 @@ class Gmail:
             loop.call_soon_threadsafe(fut.set_exception, error)
 
     def _with_reconnect[T](self, req: Callable[[SMTP], T]) -> T:
-        """Make a request with a SMTP object and try to handle SMTPServerDisconnected once."""
+        """Make a request with a SMTP object and try to handle a dead connection once: a disconnect, or a
+        421 raised during MAIL/RCPT/DATA. Does NOT cover a 421 returned to a response-based call like
+        smtp.noop() (used by the poller's keep-alive), since noop() returns its code rather than raising
+        on a non-2xx reply -- that case is only caught when the next real send hits the dead socket."""
         try:
             return req(self._smtp)
-        except SMTPServerDisconnected:
+        except (
+            SMTPServerDisconnected,
+            SMTPResponseException,
+            SMTPRecipientsRefused,
+        ) as e:
+            is_stale = (
+                isinstance(e, SMTPServerDisconnected)
+                or (isinstance(e, SMTPResponseException) and e.smtp_code == 421)
+                or (
+                    isinstance(e, SMTPRecipientsRefused)
+                    and any(code == 421 for code, _ in e.recipients.values())
+                )
+            )
+            if not is_stale:
+                raise
+
             self._smtp.close()
             self._smtp = self._default_factory()
             self._smtp.starttls()
