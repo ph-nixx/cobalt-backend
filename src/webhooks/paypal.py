@@ -20,7 +20,7 @@ from pydantic import (
 from starlette.requests import Request
 from starlette.responses import Response
 
-from bookings.types import E164
+from bookings.types import E164, LocalDatetime
 
 from . import logger
 
@@ -63,7 +63,7 @@ class Conversion(BaseModel):
     id: UUID4
     email: EmailStr
     phone: E164
-    first_click: datetime | None = None
+    first_click: LocalDatetime | None = None
     gclid: str | None = None
     gbraid: str | None = None
     wbraid: str | None = None

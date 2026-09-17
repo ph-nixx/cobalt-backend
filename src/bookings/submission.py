@@ -16,7 +16,7 @@ from cfg import Settings
 from emails import BookingLead, EmailNotSent
 
 from . import logger
-from .types import E164
+from .types import E164, LocalDatetime
 
 type InvoiceDraftURL = HttpUrl
 
@@ -48,7 +48,7 @@ class Submission(BaseModel):
     vehicle: Literal["suv", "sprinter"]
     service: Literal["airport", "corporate", "day-trip", "masters", "wedding", "other"]
     notes: str | None = None
-    first_click: datetime | None = None
+    first_click: LocalDatetime | None = None
     gclid: str | None = None
     gbraid: str | None = None
     wbraid: str | None = None
