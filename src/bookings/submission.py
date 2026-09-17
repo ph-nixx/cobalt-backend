@@ -46,7 +46,15 @@ class Submission(BaseModel):
 
     # the backend controls what form submission values are valid
     vehicle: Literal["suv", "sprinter"]
-    service: Literal["airport", "corporate", "day-trip", "masters", "wedding", "other"]
+    service: Literal[
+        "athens-football",
+        "airport",
+        "corporate",
+        "day-trip",
+        "masters",
+        "wedding",
+        "other",
+    ]
     notes: str | None = None
     first_click: LocalDatetime | None = None
     gclid: str | None = None
