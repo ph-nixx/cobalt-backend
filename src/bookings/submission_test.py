@@ -3,10 +3,12 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import asyncpg
 import httpx
 import pytest
 from pydantic import BaseModel
 from pytest_httpx import HTTPXMock
+from pytest_postgresql import factories
 from starlette.requests import Request
 
 from cfg import Settings
@@ -187,3 +189,65 @@ async def test_submission_draft_is_created_then_email_is_sent(
                 assert not resp.is_error, (
                     f"draft delete request had a failing status code:\n{resp.read()}"
                 )
+
+
+postgresql_prod_proc = factories.postgresql_proc(dbname="cobalt_test")
+
+
+@pytest.fixture
+async def prod_schema_db(postgresql_prod_proc):
+    """A `quote_requests` table, shaped like production, on a throwaway local Postgres
+    instance (not the real prod DB) — so asyncpg's real wire-protocol type encoding is
+    exercised the same way it is against the live database."""
+    conn = await asyncpg.connect(
+        host=postgresql_prod_proc.host,
+        port=postgresql_prod_proc.port,
+        user=postgresql_prod_proc.user,
+        database="postgres",
+    )
+    try:
+        await conn.execute(f'CREATE DATABASE "{postgresql_prod_proc.dbname}"')
+    finally:
+        await conn.close()
+
+    pool = await asyncpg.create_pool(
+        host=postgresql_prod_proc.host,
+        port=postgresql_prod_proc.port,
+        user=postgresql_prod_proc.user,
+        database=postgresql_prod_proc.dbname,
+    )
+    try:
+        await pool.execute(
+            """
+            CREATE TABLE quote_requests (
+                id UUID PRIMARY KEY,
+                email TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                gclid TEXT,
+                gbraid TEXT,
+                wbraid TEXT,
+                first_click TIMESTAMP
+            )
+            """
+        )
+        yield pool
+    finally:
+        await pool.close()
+
+
+async def test_submission_values_are_valid_pg_types(
+    prod_schema_db: asyncpg.Pool, user_submission: dict
+):
+    """A Submission with a first_click timestamp must insert cleanly into quote_requests."""
+    submission = Submission.model_validate(
+        {**user_submission, "first_click": "2026-09-16T12:00:00"}
+    )
+
+    await prod_schema_db.execute(
+        """
+        INSERT INTO quote_requests (
+            id, email, phone, gclid, gbraid, wbraid, first_click
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """,
+        *submission.as_row(),
+    )

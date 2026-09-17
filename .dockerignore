@@ -40,3 +40,5 @@
 # flyctl launch added from .venv/.gitignore
 .venv/**/*
 fly.toml
+
+docs

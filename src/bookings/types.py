@@ -1,32 +1,19 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
-from zoneinfo import ZoneInfo
 
 from pydantic import AfterValidator
 from pydantic_extra_types.phone_numbers import PhoneNumber, PhoneNumberValidator
-
-from . import logger
 
 type E164 = Annotated[
     PhoneNumber, PhoneNumberValidator(default_region="US", number_format="E164")
 ]
 
-_EASTERN = ZoneInfo("America/New_York")
 
-
-def _default_to_eastern(value: datetime) -> datetime:
-    """Assume US Eastern local time, resolving DST-fold ambiguity to the earlier offset, for a timestamp missing a UTC offset."""
-    if value.tzinfo is not None:
+def _strip_to_naive_utc(value: datetime) -> datetime:
+    """Convert an aware timestamp to a naive UTC instant, matching the naive `timestamp` column it's stored in."""
+    if value.tzinfo is None:
         return value
-
-    resolved = value.replace(tzinfo=_EASTERN, fold=0)
-    if resolved.utcoffset() != value.replace(tzinfo=_EASTERN, fold=1).utcoffset():
-        logger.warning(
-            "Ambiguous DST-fold timestamp %s defaulted to fold=0 (%s)",
-            value.isoformat(),
-            resolved.utcoffset(),
-        )
-    return resolved
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
-type LocalDatetime = Annotated[datetime, AfterValidator(_default_to_eastern)]
+type LocalDatetime = Annotated[datetime, AfterValidator(_strip_to_naive_utc)]
