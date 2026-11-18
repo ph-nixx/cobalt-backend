@@ -18,7 +18,7 @@ title = "Testing concurrent code"
 path = "docs/smtp/testing.md"
 
 [leads]
-title = "Responding to leads within an hour"
+title = "Faster lead responses"
 path = "docs/leads/index.md"
 
 [leads.emails]
@@ -30,7 +30,7 @@ title = "PayPal invoice drafts"
 path = "docs/leads/invoices.md"
 
 [conversions]
-title = "Knowing which ads make money"
+title = "Ad conversion tracking"
 path = "docs/conversions/index.md"
 
 [conversions.webhook]
