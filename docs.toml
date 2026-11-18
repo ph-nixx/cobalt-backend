@@ -2,7 +2,7 @@
 title = "Cobalt"
 
 [smtp]
-title = "Faster form submissions"
+title = "Form submission tracking"
 path = "docs/smtp/index.md"
 
 [smtp.threading]
@@ -18,7 +18,7 @@ title = "Testing concurrent code"
 path = "docs/smtp/testing.md"
 
 [leads]
-title = "Faster lead responses"
+title = "Lead automation"
 path = "docs/leads/index.md"
 
 [leads.emails]
