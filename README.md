@@ -1,5 +1,3 @@
-# Cobalt
-
 The backend for Cobalt Transportation, a private chauffeur and van service in Atlanta. 
 It turns booking requests from the company website into instant leads
 and PayPal invoice drafts for the owner, and traces paid invoices back to the
