@@ -1,3 +1,46 @@
 [project]
 title = "Cobalt"
 
+[smtp]
+title = "Faster form submissions"
+path = "docs/smtp/index.md"
+
+[smtp.threading]
+title = "Threading model"
+path = "docs/smtp/threading.md"
+
+[smtp.failures]
+title = "Failure handling"
+path = "docs/smtp/failures.md"
+
+[smtp.testing]
+title = "Testing concurrent code"
+path = "docs/smtp/testing.md"
+
+[leads]
+title = "Responding to leads within an hour"
+path = "docs/leads/index.md"
+
+[leads.emails]
+title = "Templated emails"
+path = "docs/leads/emails.md"
+
+[leads.invoices]
+title = "PayPal invoice drafts"
+path = "docs/leads/invoices.md"
+
+[conversions]
+title = "Knowing which ads make money"
+path = "docs/conversions/index.md"
+
+[conversions.webhook]
+title = "Webhook verification"
+path = "docs/conversions/webhook.md"
+
+[conversions.linking]
+title = "Linking conversions"
+path = "docs/conversions/linking.md"
+
+[lessons]
+title = "Lessons and next steps"
+path = "docs/lessons.md"
