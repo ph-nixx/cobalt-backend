@@ -10,6 +10,8 @@ Built with Python and [Starlette](https://starlette.dev/). A work queue passes e
 to two background threads that share one long-lived Gmail SMTP connection: 
 one sends emails, the other keeps the connection alive.
 
+## Problems
+
 Opening a connection is the slow part of sending an email. Before a message can
 go out, the server has to connect to Gmail, set up encryption, and log in. Each
 step waits on a reply from Gmail, and the old backend went through all of them
@@ -27,6 +29,8 @@ thread and the keep-alive thread share one connection, so both can find it
 stale at the same moment and race to replace it. If a background thread dies
 from an unhandled exception, it fails silently, and the request waiting on its
 email hangs forever.
+
+## Decisions
 
 The simplest way to make the form fast would have been to stop waiting for the
 email: respond to the customer right away and send the email afterward. The
